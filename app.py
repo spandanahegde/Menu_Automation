@@ -11,9 +11,7 @@ Build order (per the project plan): Overview + sidebar nav first, then the
 Menu Refresh module end-to-end, then Menu Creation.
 """
 
-import hashlib
 import io
-import json
 
 import streamlit as st
 import pandas as pd
@@ -427,45 +425,30 @@ def _render_workflow_result(result, source_name):
 # ----------------------------------------------------------------------
 # Menu Creation
 # ----------------------------------------------------------------------
-def _clear_menu_creation_cache():
-    for key in (
-        "menu_creation_result",
-        "menu_creation_zcta",
-        "menu_creation_signature",
-        "menu_creation_report_html",
-        "menu_creation_ctx",
-        "menu_creation_issues",
-    ):
-        st.session_state.pop(key, None)
-
-
-def _file_signature(uploaded_file):
-    if uploaded_file is None:
-        return None
-    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
-
-
-def _menu_creation_signature(zcta, state_abbr, city, county, area_sq_mi, biz_residential_mix,
-                             has_anchor, anchor_note, n_items, restaurant_file_sig,
-                             comparable_file_sig):
-    payload = {
-        "zcta": str(zcta).zfill(5),
-        "state_abbr": (state_abbr or "").strip().upper(),
-        "city": (city or "").strip(),
-        "county": (county or "").strip(),
-        "area_sq_mi": round(float(area_sq_mi), 2),
-        "biz_residential_mix": biz_residential_mix,
-        "has_anchor": bool(has_anchor),
-        "anchor_note": (anchor_note or "").strip(),
-        "n_items": int(n_items),
-        "restaurant_file_sig": restaurant_file_sig,
-        "comparable_file_sig": comparable_file_sig,
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-
-
 def render_menu_creation():
     st.title("📋 Menu Creation")
+
+    if st.session_state.get("menu_creation_result") is not None:
+        shown_zcta = st.session_state.get("menu_creation_zcta", "?")
+        st.info(
+            f"📍 Showing results for **ZCTA {shown_zcta}**. Selecting a different ZCTA anywhere on this "
+            f"page does nothing by itself -- you must click **Start a new Menu Creation** below to "
+            f"generate for a different ZIP. This message is intentionally hard to miss.",
+            icon="📍",
+        )
+        if st.button("🔄 Start a new Menu Creation (pick a different ZCTA)", key="mc_start_new",
+                     type="primary", use_container_width=True):
+            st.session_state["menu_creation_result"] = None
+            st.session_state["menu_creation_zcta"] = None
+            st.session_state["menu_creation_report_html"] = None
+            st.session_state["menu_creation_ctx"] = None
+            st.rerun()
+        _render_menu_creation_result(
+            st.session_state["menu_creation_result"],
+            st.session_state.get("menu_creation_zcta", ""),
+            st.session_state.get("menu_creation_report_html"),
+        )
+        return
 
     st.markdown(
         "Upload a restaurant list, pick a ZCTA, and get net-new menu item "
@@ -512,8 +495,6 @@ def render_menu_creation():
         help="One row per comparable restaurant, with restaurant name plus price and quantity-sold columns. "
              "This becomes the primary source for revenue-forecast Base Units.",
     )
-    restaurant_file_sig = _file_signature(uploaded)
-    comparable_file_sig = _file_signature(comparable_uploaded)
 
     if uploaded is None:
         st.info("Upload a restaurant list to begin.")
@@ -570,109 +551,103 @@ def render_menu_creation():
         "Number of new items to generate", min_value=1, max_value=50, value=7, step=1, key="mc_n_items",
     )
 
-    current_signature = _menu_creation_signature(
-        selected_zcta, state_abbr, city, county, area_sq_mi, biz_residential_mix,
-        has_anchor, anchor_note, n_items, restaurant_file_sig, comparable_file_sig,
-    )
+    with st.expander("Only if commuter-flow auto-fetch fails or hangs: enter it manually", expanded=False):
+        st.caption(
+            "Leave all at 0 to skip this and let the app fetch commuter data automatically. If a run "
+            "hangs at 'Fetching commuter flow data (LODES)...' or 'Downloading Census block relationship "
+            "file...', that fetch will now time out on its own after a few minutes -- but you can also "
+            "fill this in ahead of time to skip the live fetch entirely for this ZCTA."
+        )
+        mcol1, mcol2, mcol3 = st.columns(3)
+        with mcol1:
+            man_daytime_workers = st.number_input("Daytime workers (jobs in this ZCTA)", value=0.0, min_value=0.0, key="mc_man_dw")
+            man_worker_inflow = st.number_input("Worker inflow (commute in)", value=0.0, min_value=0.0, key="mc_man_wi")
+        with mcol2:
+            man_resident_outflow = st.number_input("Resident outflow (commute out)", value=0.0, min_value=0.0, key="mc_man_ro")
+            man_stay_local = st.number_input("Stay-local (live & work here)", value=0.0, min_value=0.0, key="mc_man_sl")
+        with mcol3:
+            man_pct_income_high = st.number_input("% inflow >$3,333/mo", value=0.0, min_value=0.0, max_value=100.0, key="mc_man_pih")
+            man_pct_income_low = st.number_input("% inflow <$1,250/mo", value=0.0, min_value=0.0, max_value=100.0, key="mc_man_pil")
+            man_pct_age_mid = st.number_input("% inflow age 30-54", value=0.0, min_value=0.0, max_value=100.0, key="mc_man_pam")
+            man_pct_age_senior = st.number_input("% inflow age 55+", value=0.0, min_value=0.0, max_value=100.0, key="mc_man_pas")
 
-    cached_result = st.session_state.get("menu_creation_result")
-    cached_zcta = st.session_state.get("menu_creation_zcta")
-    cached_signature = st.session_state.get("menu_creation_signature")
-    if cached_result is not None:
-        if cached_zcta != selected_zcta or cached_signature != current_signature:
-            _clear_menu_creation_cache()
-            cached_result = None
-            cached_zcta = None
-            cached_signature = None
-            st.info(
-                "Cleared the cached report because the selected ZCTA or current inputs changed. "
-                "Generate a new Menu Creation run for the active ZCTA."
-            )
-        else:
-            st.info(
-                f"Cached report loaded for ZCTA {cached_zcta}. Change the fields below "
-                "and click Generate Menu to replace it."
-            )
+    manual_commuter_flow = None
+    if man_daytime_workers > 0 or man_worker_inflow > 0:
+        manual_commuter_flow = {
+            "daytime_workers": man_daytime_workers, "worker_inflow": man_worker_inflow,
+            "resident_outflow": man_resident_outflow, "stay_local": man_stay_local,
+            "pct_income_high": man_pct_income_high, "pct_income_low": man_pct_income_low,
+            "pct_age_mid": man_pct_age_mid, "pct_age_senior": man_pct_age_senior,
+            "pct_office_jobs": 0.0, "source": "Manually entered",
+        }
 
-    generate_clicked = st.button("🚀 Generate Menu", type="primary", use_container_width=True)
-    if not generate_clicked and st.session_state.get("menu_creation_result") is None:
+    if not st.button("🚀 Generate Menu", type="primary", use_container_width=True):
         return
 
-    if generate_clicked:
-        log_lines = []
-        with st.status("Running Menu Creation…", expanded=True) as status:
-            log_placeholder = st.empty()
+    log_lines = []
+    with st.status("Running Menu Creation…", expanded=True) as status:
+        log_placeholder = st.empty()
 
-            def progress(message, fraction=None):
-                log_lines.append(message)
-                log_placeholder.markdown("\n".join(f"- {m}" for m in log_lines))
-                if fraction is not None:
-                    status.update(label=f"Running Menu Creation… ({int(fraction*100)}%)")
+        def progress(message, fraction=None):
+            log_lines.append(message)
+            log_placeholder.markdown("\n".join(f"- {m}" for m in log_lines))
+            if fraction is not None:
+                status.update(label=f"Running Menu Creation… ({int(fraction*100)}%)")
 
-            try:
-                result_df, issues, income_by_ethnicity, ethnicity_composition, ctx = rmc.run(
-                    restaurant_df=norm.df, zcta=selected_zcta, city=city, county=county,
-                    area_sq_mi=area_sq_mi, biz_residential_mix=biz_residential_mix,
-                    has_anchor=has_anchor, anchor_note=anchor_note, n_items=n_items,
-                    state_abbr=state_abbr or None, progress_callback=progress,
-                    comparable_metrics_df=comparable_raw_df,
-                    already_normalized=True,
+        try:
+            result_df, issues, income_by_ethnicity, ethnicity_composition, ctx = rmc.run(
+                restaurant_df=norm.df, zcta=selected_zcta, city=city, county=county,
+                area_sq_mi=area_sq_mi, biz_residential_mix=biz_residential_mix,
+                has_anchor=has_anchor, anchor_note=anchor_note, n_items=n_items,
+                state_abbr=state_abbr or None, progress_callback=progress,
+                comparable_metrics_df=comparable_raw_df,
+                already_normalized=True,
+                commuter_flow_override=manual_commuter_flow,
+            )
+        except rmc.MenuCreationError as e:
+            status.update(label="Stopped", state="error")
+            st.error(str(e))
+            if manual_commuter_flow is None:
+                st.info(
+                    "If the commuter-flow fetch is the problem, open 'enter it manually' above and "
+                    "fill in at least Daytime workers and Worker inflow, then run again."
                 )
-            except rmc.MenuCreationError as e:
-                status.update(label="Stopped", state="error")
-                st.error(str(e))
-                return
-            except Exception as e:
-                status.update(label="Stopped", state="error")
-                st.error(f"Unexpected error: {e}")
-                return
+            return
+        except Exception as e:
+            status.update(label="Stopped", state="error")
+            st.error(f"Unexpected error: {e}")
+            return
 
-            report_html = None
-            progress("Generating the HTML report…", 0.97)
-            try:
-                with open("menu_creation_report_template.html", encoding="utf-8") as f:
-                    template_html = f.read()
-                report_html = cre.render_report(
-                    template_html, ctx, result_df, ethnicity_composition, income_by_ethnicity, issues,
-                )
-            except FileNotFoundError:
-                st.warning(
-                    "menu_creation_report_template.html wasn't found next to app.py -- the workbook "
-                    "still generated, but the HTML report was skipped. Place the reference report "
-                    "template file (used as the report's design source) at that path to enable it."
-                )
-            except Exception as e:
-                st.warning(f"HTML report generation failed ({e}) -- the workbook still generated normally.")
+        report_html = None
+        progress("Generating the HTML report…", 0.97)
+        try:
+            with open("menu_creation_report_template.html", encoding="utf-8") as f:
+                template_html = f.read()
+            report_html = cre.render_report(
+                template_html, ctx, result_df, ethnicity_composition, income_by_ethnicity, issues,
+            )
+        except FileNotFoundError:
+            st.warning(
+                "menu_creation_report_template.html wasn't found next to app.py -- the workbook "
+                "still generated, but the HTML report was skipped. Place the reference report "
+                "template file (used as the report's design source) at that path to enable it."
+            )
+        except Exception as e:
+            st.warning(f"HTML report generation failed ({e}) -- the workbook still generated normally.")
 
-            status.update(label="Menu Creation complete", state="complete")
+        status.update(label="Menu Creation complete", state="complete")
 
-        # Persist so results survive reruns (e.g. clicking a download button)
-        # until the user explicitly starts a new run.
-        st.session_state["menu_creation_result"] = result_df
-        st.session_state["menu_creation_zcta"] = selected_zcta
-        st.session_state["menu_creation_signature"] = current_signature
-        st.session_state["menu_creation_issues"] = issues
-        st.session_state["menu_creation_report_html"] = report_html
-        st.session_state["menu_creation_ctx"] = ctx
-        st.rerun()
-
-    cached_result = st.session_state.get("menu_creation_result")
-    if cached_result is not None:
-        st.markdown("---")
-        _render_menu_creation_result(
-            cached_result,
-            st.session_state.get("menu_creation_zcta", ""),
-            st.session_state.get("menu_creation_report_html"),
-        )
+    # Persist so results survive reruns (e.g. clicking a download button)
+    # until the user explicitly starts a new run.
+    st.session_state["menu_creation_result"] = result_df
+    st.session_state["menu_creation_zcta"] = selected_zcta
+    st.session_state["menu_creation_issues"] = issues
+    st.session_state["menu_creation_report_html"] = report_html
+    st.session_state["menu_creation_ctx"] = ctx
+    st.rerun()
 
 
 def _render_menu_creation_result(result_df, zcta, report_html=None):
-    top_cols = st.columns([1.25, 4])
-    with top_cols[0]:
-        if st.button("Start a new Menu Creation", key="mc_start_new"):
-            _clear_menu_creation_cache()
-            st.rerun()
-
     for issue in st.session_state.get("menu_creation_issues", []):
         st.warning(issue)
 

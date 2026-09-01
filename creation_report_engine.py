@@ -82,10 +82,9 @@ def build_zip_stats(ctx, ep_source: str = "ACS 5-Year") -> list:
          "evidence": f"A business interpretation, not a raw data field: at ${ctx.median_income:,.0f} median household income, this ZIP is classified {income_level.lower()}."},
         {"label": "Population Growth Rate", "value": growth_str, "sub": "Real, measured change",
          "evidence": growth_evidence, "_available": ctx.population_growth_rate is not None},
-        {"label": "Total Households",
-         "value": f"{getattr(ctx, 'total_households', 0):,}" if getattr(ctx, "total_households", 0) else "Data Not Available",
-         "sub": "Basis for segmentation",
-         "evidence": "The total number of households in this ZIP -- the denominator used to calculate the Value/Premium/Premium Edge segmentation percentages."},
+        {"label": "Total Households", "value": f"{getattr(ctx, 'total_households', 0):,}", "sub": "Basis for segmentation",
+         "evidence": "The total number of households in this ZIP -- the denominator used to calculate the Value/Premium/Premium Edge segmentation percentages.",
+         "_available": bool(getattr(ctx, "total_households", 0))},
         {"label": "Labor Force Participation", "value": f"{ctx.labor_force_participation_rate}%", "sub": "vs ~63% national rate",
          "evidence": f"The share of residents aged 16+ who are either working or actively looking for work. At {ctx.labor_force_participation_rate}%, this is compared against the ~63% national rate."},
     ]
@@ -98,30 +97,28 @@ def build_zip_stats(ctx, ep_source: str = "ACS 5-Year") -> list:
 
 def build_segs(ctx) -> list:
     total_hh = getattr(ctx, "total_households", 0)
-    family_raw = int(getattr(ctx, "family_value_households", 0) or 0)
-    premium_raw = int(getattr(ctx, "premium_households", 0) or 0)
-    premium_edge_raw = int(getattr(ctx, "premium_edge_households", 0) or 0)
-    available = bool(getattr(ctx, "customer_segments_available", total_hh > 0))
-
-    def _pct(v):
-        return v if v is not None else 0.0
-
-    def _evidence(name: str, raw: int, pct: float, detail: str) -> str:
-        if not available or not total_hh:
-            return f"{name} segment could not be calculated for ZIP {ctx.zcta}; the underlying ACS household counts were unavailable."
-        return (
-            f"Raw ACS B19001 counts for {detail} sum to {raw:,} households. "
-            f"{raw:,} / {total_hh:,} = {pct:.2f}% of ZIP households. "
-            f"The calculator normalizes the three segment shares to exactly 100.00% after rounding."
+    if not getattr(ctx, "segmentation_available", True):
+        note = (
+            f"Data Not Available -- Census published a real Total Households figure ({total_hh:,}) for "
+            f"this ZIP, but the detailed income-bracket breakdown (ACS Table B19001) came back empty for "
+            f"this specific geography. Not shown as a percentage because there's no real bracket data to "
+            f"report -- see the ZIP's own Census page for confirmation."
         )
-
+        return [
+            {"name": "Value", "pct": 0, "color": "#2F5D4A", "evidence": note, "unavailable": True},
+            {"name": "Premium", "pct": 0, "color": "#C9973B", "evidence": note, "unavailable": True},
+            {"name": "Premium Edge", "pct": 0, "color": "#6E1423", "evidence": note, "unavailable": True},
+        ]
     return [
-        {"name": "Value", "pct": _pct(ctx.family_pct), "color": "#2F5D4A",
-         "evidence": _evidence("Value", family_raw, _pct(ctx.family_pct), "the <$25K and $25K-$49K ACS B19001 brackets")},
-        {"name": "Premium", "pct": _pct(ctx.premium_pct), "color": "#C9973B",
-         "evidence": _evidence("Premium", premium_raw, _pct(ctx.premium_pct), "the $50K-$99K and $100K-$149K ACS B19001 brackets")},
-        {"name": "Premium Edge", "pct": _pct(ctx.premium_edge_pct), "color": "#6E1423",
-         "evidence": _evidence("Premium Edge", premium_edge_raw, _pct(ctx.premium_edge_pct), "the $150K+ ACS B19001 bracket")},
+        {"name": "Value", "pct": ctx.family_pct, "color": "#2F5D4A",
+         "evidence": f"Households in the Income < $25K and $25K-$49K brackets, {ctx.family_pct}% of {total_hh:,} total households -- real income-bracket data from ACS B19001, not an estimate." if total_hh else
+                      f"Households in the Income < $25K and $25K-$49K brackets = {ctx.family_pct}% -- real income-bracket data from ACS B19001."},
+        {"name": "Premium", "pct": ctx.premium_pct, "color": "#C9973B",
+         "evidence": f"Households in the $50K-$99K bracket, {ctx.premium_pct}% of {total_hh:,} total households -- real income-bracket data." if total_hh else
+                      f"Households in the $50K-$99K bracket = {ctx.premium_pct}% -- real income-bracket data."},
+        {"name": "Premium Edge", "pct": ctx.premium_edge_pct, "color": "#6E1423",
+         "evidence": f"Households in the $100K-$149K and $150K+ brackets, {ctx.premium_edge_pct}% of {total_hh:,} total households -- the smallest, highest-income segment in this ZIP." if total_hh else
+                      f"Households in the $100K-$149K and $150K+ brackets = {ctx.premium_edge_pct}% -- the smallest, highest-income segment in this ZIP."},
     ]
 
 
@@ -146,6 +143,11 @@ def build_items_js(result_df) -> list:
             "confidenceExplanation": r["Confidence Score Explanation"],
             "reason": r["Reason for Recommendation"],
             "demographicFit": r["Demographic Fit Reason"],
+            "primaryCuisine": r.get("Primary Cuisine (ZCTA-wide)", "Unavailable"),
+            "secondaryCuisine": r.get("Secondary Cuisine (ZCTA-wide)", "Unavailable"),
+            "cuisineAffinityScore": r.get("Cuisine Affinity Score (this item's category)"),
+            "whyCategoryFits": r.get("Why This Category Fits This ZCTA", ""),
+            "uniquenessResult": r.get("Uniqueness Validation Result", ""),
             "residentialNote": r["Residential vs. Business-Area Note"],
             "weekdayRole": r["Weekday Menu Role"],
             "weekendRole": r["Weekend Menu Role"],
@@ -209,6 +211,7 @@ def build_revmap(result_df) -> dict:
 
         revmap[r["Recommended New Menu Item"]] = {
             "comp1": comp1, "comp2": comp2, "compSalesCategory": r["Recommended Category"],
+            "compCount": r["# Comparable Restaurants Found"],
             "baseUnitsM": r["Base Units (Monthly) -- category/market demand methodology, no multipliers applied"],
             "baseUnitsSource": r["Base Units Source"],
             "demandMult": r["Demand Multiplier (ZIP-wide, from Market Demand Level)"],
@@ -224,13 +227,22 @@ def build_revmap(result_df) -> dict:
             "unitsNext6m": r["Next 6-Month Units (Months 7-12)"], "revNext6m": r["Estimated Next 6-Month Revenue ($)"],
             "unitsNext9m": r["Next 9-Month Units (Months 13-21)"], "revNext9m": r["Estimated Next 9-Month Revenue ($)"],
             "lunchShare": r["Lunch Unit Share (%)"], "lunchPrice": r["Lunch Occasion Price ($)"],
+            "lunchMult": r["Lunch Price Multiplier"],
             "lunchUnits": r["Lunch Estimated Units (Monthly)"], "lunchRev": r["Lunch Estimated Revenue (Monthly $)"],
             "dinnerShare": r["Dinner Unit Share (%)"], "dinnerPrice": r["Dinner Occasion Price ($)"],
+            "dinnerMult": r["Dinner Price Multiplier"],
             "dinnerUnits": r["Dinner Estimated Units (Monthly)"], "dinnerRev": r["Dinner Estimated Revenue (Monthly $)"],
             "wdShare": r["Weekday Unit Share (%)"], "wdPrice": r["Weekday Occasion Price ($)"],
+            "wdMult": r["Weekday Price Multiplier"],
             "wdUnits": r["Weekday Estimated Units (Monthly)"], "wdRev": r["Weekday Estimated Revenue (Monthly $)"],
             "weShare": r["Weekend Unit Share (%)"], "wePrice": r["Weekend Occasion Price ($)"],
+            "weMult": r["Weekend Price Multiplier"],
             "weUnits": r["Weekend Estimated Units (Monthly)"], "weRev": r["Weekend Estimated Revenue (Monthly $)"],
+            # Steady-state per-item monthly revenue -- always an estimate
+            # (see revenue_forecast.build_revenue_forecast_row); the report
+            # JS labels it "Estimated" explicitly rather than presenting it
+            # as an observed figure.
+            "steadyRev": r["Estimated Steady-State Monthly Revenue ($)"],
         }
     return revmap
 
@@ -756,6 +768,9 @@ def render_report(template_html: str, ctx, result_df, ethnicity_composition,
          f"ZIP {zcta}, plus the actual list of {n} real restaurant{'s' if n != 1 else ''} operating in this ZIP."),
         (f"the real names of the {ORIGINAL_N} existing restaurants in ZIP {ORIGINAL_ZCTA}.",
          f"the real names of the {n} existing restaurant{'s' if n != 1 else ''} in ZIP {zcta}."),
+        ("The three cards below total the projected profit dollars across all 7 recommended items.",
+         f"The three cards below total the projected profit dollars across all {len(result_df)} "
+         f"recommended item{'s' if len(result_df) != 1 else ''}."),
     ]
     for old, new in replacements:
         if old in html:

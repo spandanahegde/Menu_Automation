@@ -41,7 +41,7 @@ creation_engine.ZctaContext.family_pct keeps its attribute name since
 that's just a Python identifier, not report-facing text.
 """
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
@@ -50,6 +50,16 @@ class DishTemplate:
     description: str
     portion_note: str = "Standard individual portion."
     daypart: str = "lunch"  # "lunch" | "dinner" -- see select_dish() for how this is used
+    # concept_key: (protein_or_base, prep_method) -- the CONCEPT signature
+    # used for uniqueness validation (duplicate_detector-style, but at the
+    # concept level, not the display-name level). "Fire-Grilled Chicken
+    # Burger" / "Charred Chicken Burger" / "Signature Chicken Burger" all
+    # resolve to the SAME concept_key regardless of which adjective
+    # creative_naming.py later attaches, because the key is built from the
+    # template's real protein + prep method + category, never the
+    # generated display name. When left blank it's derived automatically
+    # from base_ingredients (see _derive_concept_key below).
+    concept_key: Optional[tuple] = None
 
 
 @dataclass
@@ -62,6 +72,7 @@ class GeneratedDish:
     indulgent_lean: float
     portion_note: str
     template_selection_note: str = ""
+    concept_key: tuple = field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------
@@ -71,92 +82,142 @@ DISH_TEMPLATES = {
     "Wings": [
         DishTemplate(
             ["chicken wings", "buffalo sauce", "celery sticks", "blue cheese dressing"],
-            "Crispy fried chicken wings tossed in buffalo sauce, served with celery and blue cheese."),
+            "Crispy fried chicken wings tossed in buffalo sauce, served with celery and blue cheese.",
+            concept_key=("chicken wings", "fried_buffalo")),
         DishTemplate(
             ["chicken wings", "dry rub seasoning", "brown sugar", "ranch dressing"],
             "Oven-baked chicken wings coated in a sweet-and-savory dry rub, served with ranch.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("chicken wings", "baked_dry_rub")),
+        DishTemplate(
+            ["chicken wings", "korean gochujang glaze", "sesame seeds", "scallions"],
+            "Twice-fried chicken wings tossed in a sweet-spicy Korean gochujang glaze with sesame and scallions.",
+            concept_key=("chicken wings", "fried_gochujang")),
     ],
     "Burgers": [
         DishTemplate(
             ["beef patty", "american cheese", "lettuce", "tomato", "onion", "pickles", "sesame bun"],
-            "A grilled beef patty topped with american cheese, lettuce, tomato, onion, and pickles on a toasted sesame bun."),
+            "A grilled beef patty topped with american cheese, lettuce, tomato, onion, and pickles on a toasted sesame bun.",
+            concept_key=("beef patty", "grilled_classic")),
         DishTemplate(
             ["beef patty", "cheddar cheese", "caramelized onions", "mushrooms", "brioche bun"],
             "A grilled beef patty topped with melted cheddar, caramelized onions, and sautéed mushrooms on a brioche bun.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("beef patty", "grilled_mushroom_swiss")),
+        DishTemplate(
+            ["black bean patty", "pepper jack cheese", "avocado", "chipotle mayo", "pretzel bun"],
+            "A house-made black bean patty with pepper jack, avocado, and chipotle mayo on a pretzel bun.",
+            concept_key=("black bean patty", "meatless_chipotle")),
     ],
     "Pizza": [
         DishTemplate(
             ["pizza dough", "marinara sauce", "mozzarella cheese", "pepperoni"],
-            "Hand-tossed pizza dough topped with marinara, mozzarella, and pepperoni."),
+            "Hand-tossed pizza dough topped with marinara, mozzarella, and pepperoni.",
+            concept_key=("pizza dough", "baked_pepperoni")),
         DishTemplate(
             ["pizza dough", "olive oil", "mozzarella cheese", "fresh basil", "roma tomatoes"],
             "Hand-tossed pizza dough with olive oil, fresh mozzarella, basil, and roma tomatoes.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("pizza dough", "baked_margherita")),
+        DishTemplate(
+            ["pizza dough", "bbq sauce", "smoked chicken", "red onion", "cilantro"],
+            "Hand-tossed pizza dough topped with bbq sauce, smoked pulled chicken, red onion, and cilantro.",
+            concept_key=("pizza dough", "baked_bbq_chicken")),
     ],
     "Sandwiches": [
         DishTemplate(
             ["sliced turkey", "swiss cheese", "lettuce", "tomato", "mayo", "sourdough bread"],
-            "Sliced turkey and swiss cheese with lettuce, tomato, and mayo on toasted sourdough."),
+            "Sliced turkey and swiss cheese with lettuce, tomato, and mayo on toasted sourdough.",
+            concept_key=("turkey", "cold_classic")),
         DishTemplate(
             ["grilled chicken breast", "provolone cheese", "spinach", "roasted red peppers", "ciabatta bread"],
             "Grilled chicken breast with provolone, spinach, and roasted red peppers on ciabatta.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("chicken breast", "grilled_ciabatta")),
+        DishTemplate(
+            ["fried cod fillet", "tartar sauce", "shredded lettuce", "brioche roll"],
+            "A crispy fried cod fillet with tartar sauce and shredded lettuce on a toasted brioche roll.",
+            concept_key=("cod fillet", "fried_tartar")),
     ],
     "BBQ": [
         DishTemplate(
             ["smoked pulled pork", "bbq sauce", "coleslaw", "brioche bun"],
-            "Slow-smoked pulled pork tossed in bbq sauce, topped with coleslaw on a brioche bun."),
+            "Slow-smoked pulled pork tossed in bbq sauce, topped with coleslaw on a brioche bun.",
+            concept_key=("pulled pork", "smoked_pulled")),
         DishTemplate(
             ["smoked beef brisket", "bbq rub", "pickles", "white bread", "bbq sauce"],
             "Hickory-smoked beef brisket with a dry bbq rub, served with pickles and white bread.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("beef brisket", "smoked_sliced")),
+        DishTemplate(
+            ["smoked half chicken", "bbq dry rub", "bbq sauce", "cornbread"],
+            "Hickory-smoked half chicken with a bbq dry rub, served with a side of cornbread.",
+            concept_key=("chicken", "smoked_half_chicken")),
     ],
     "Seafood": [
         DishTemplate(
             ["fried catfish", "cornmeal breading", "tartar sauce", "hush puppies", "coleslaw"],
-            "Cornmeal-breaded fried catfish served with tartar sauce, hush puppies, and coleslaw."),
+            "Cornmeal-breaded fried catfish served with tartar sauce, hush puppies, and coleslaw.",
+            concept_key=("catfish", "fried_cornmeal")),
         DishTemplate(
             ["grilled shrimp", "garlic butter", "lemon", "rice pilaf"],
             "Grilled shrimp finished in garlic butter and lemon, served over rice pilaf.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("shrimp", "grilled_garlic_butter")),
+        DishTemplate(
+            ["blackened salmon", "cajun seasoning", "mango salsa", "jasmine rice"],
+            "Cajun-blackened salmon topped with mango salsa, served over jasmine rice.",
+            concept_key=("salmon", "blackened_mango")),
     ],
     "Mexican": [
         DishTemplate(
             ["seasoned ground beef", "cheddar cheese", "lettuce", "pico de gallo", "flour tortilla"],
-            "Seasoned ground beef with cheddar, lettuce, and pico de gallo wrapped in a flour tortilla."),
+            "Seasoned ground beef with cheddar, lettuce, and pico de gallo wrapped in a flour tortilla.",
+            concept_key=("ground beef", "seasoned_burrito")),
         DishTemplate(
             ["grilled chicken", "black beans", "rice", "pico de gallo", "sour cream", "corn tortillas"],
             "Grilled chicken with black beans and rice, topped with pico de gallo and sour cream on corn tortillas.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("chicken", "grilled_taco_bowl")),
+        DishTemplate(
+            ["carne asada", "grilled onions", "cilantro", "lime crema", "corn tortillas"],
+            "Grilled carne asada with charred onions, cilantro, and lime crema on warm corn tortillas.",
+            concept_key=("carne asada", "grilled_street_taco")),
     ],
     "Breakfast": [
         DishTemplate(
             ["scrambled eggs", "cheddar cheese", "bacon", "biscuit"],
-            "Fluffy scrambled eggs with melted cheddar and crispy bacon on a fresh-baked biscuit."),
+            "Fluffy scrambled eggs with melted cheddar and crispy bacon on a fresh-baked biscuit.",
+            concept_key=("eggs", "scrambled_biscuit")),
         DishTemplate(
             ["buttermilk pancakes", "maple syrup", "butter", "seasonal berries"],
             "Stacked buttermilk pancakes with butter, maple syrup, and seasonal berries.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("pancakes", "stacked_berries")),
+        DishTemplate(
+            ["breakfast burrito", "scrambled eggs", "chorizo", "hash browns", "salsa verde"],
+            "A breakfast burrito with scrambled eggs, chorizo, hash browns, and salsa verde.",
+            concept_key=("eggs", "burrito_chorizo")),
     ],
     "Sushi/Asian": [
         DishTemplate(
             ["sushi rice", "nori", "crab", "avocado", "cucumber"],
-            "Sushi rice and nori rolled with crab, avocado, and cucumber."),
+            "Sushi rice and nori rolled with crab, avocado, and cucumber.",
+            concept_key=("crab", "roll_california")),
         DishTemplate(
             ["stir-fried noodles", "soy sauce", "vegetables", "scrambled egg", "scallions"],
             "Stir-fried noodles tossed in soy sauce with vegetables, egg, and scallions.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("noodles", "stir_fried")),
+        DishTemplate(
+            ["thai basil chicken", "jasmine rice", "chili garlic sauce", "fried egg"],
+            "Wok-seared Thai basil chicken over jasmine rice with chili garlic sauce and a fried egg.",
+            concept_key=("chicken", "thai_basil_wok")),
     ],
     "Southern": [
         DishTemplate(
             ["fried chicken", "buttermilk batter", "mashed potatoes", "gravy", "cornbread"],
-            "Buttermilk-battered fried chicken served with mashed potatoes, gravy, and cornbread."),
+            "Buttermilk-battered fried chicken served with mashed potatoes, gravy, and cornbread.",
+            concept_key=("chicken", "fried_buttermilk_plate")),
         DishTemplate(
             ["shrimp", "stone-ground grits", "cheddar cheese", "andouille sausage", "cajun seasoning"],
             "Sautéed shrimp and andouille sausage over cheddar stone-ground grits, cajun-seasoned.",
-            daypart="dinner"),
+            daypart="dinner", concept_key=("shrimp", "sauteed_grits")),
+        DishTemplate(
+            ["smothered pork chop", "brown gravy", "collard greens", "candied yams"],
+            "A smothered pork chop in brown gravy, served with collard greens and candied yams.",
+            concept_key=("pork chop", "smothered_plate")),
     ],
     "Italian": [
         DishTemplate(
@@ -310,10 +371,52 @@ def _rank_upgrades_by_comparable_signal(upgrades: list, best_comparable_item: Op
     return matched + unmatched
 
 
+def _derive_concept_key(template: DishTemplate) -> tuple:
+    """Fallback concept-key derivation for any template that didn't get
+    one hand-tagged above: (first real protein/base ingredient, coarse
+    prep-method signal from creative_naming's signal table). Two templates
+    that reduce to the same (protein, prep) pair are the SAME underlying
+    concept even if their adjectives/names differ later."""
+    if template.concept_key:
+        return template.concept_key
+    from creative_naming import _detect_signals
+    base = template.base_ingredients[0] if template.base_ingredients else "unknown"
+    signals = _detect_signals(' '.join(template.base_ingredients) + ' ' + template.description)
+    prep = signals[0] if signals else "plain"
+    return (base, prep)
+
+
+def is_duplicate_concept(candidate_key: tuple, used_keys: set) -> bool:
+    """CONCEPT-level uniqueness check (not name-level). Rejects an exact
+    (protein/base, prep-method) repeat outright, and also rejects a
+    same-protein match even with a different prep tag once that protein
+    has already been used twice in this batch/session -- catches
+    "Fire-Grilled Chicken Burger" vs "Charred Chicken Burger" vs
+    "Signature Chicken Burger" style near-duplicates, which share a
+    protein+category concept even though creative_naming would give them
+    different adjectives."""
+    if candidate_key in used_keys:
+        return True
+    candidate_base = candidate_key[0] if candidate_key else None
+    same_base_count = sum(1 for k in used_keys if k and k[0] == candidate_base)
+    return same_base_count >= 2
+
+
+def has_available_concept(category: str, used_concept_keys: set) -> bool:
+    """True if this category still has at least one template whose
+    concept hasn't already been used this batch/session. Lets the caller
+    (run_menu_creation) move on to the NEXT cuisine-ranked category
+    instead of forcing dish_library to silently reuse a concept."""
+    templates = DISH_TEMPLATES.get(category, DISH_TEMPLATES[DEFAULT_CATEGORY])
+    used_concept_keys = used_concept_keys or set()
+    return any(not is_duplicate_concept(_derive_concept_key(t), used_concept_keys) for t in templates)
+
+
 def select_dish(category: str, tier: str, template_index: int,
                  evidence_count: int, household_size: float,
                  lunch_share: Optional[float] = None,
-                 best_comparable_item: Optional[dict] = None) -> GeneratedDish:
+                 best_comparable_item: Optional[dict] = None,
+                 used_concept_keys: Optional[set] = None) -> GeneratedDish:
     """
     category: a creation_engine.CATEGORY_KEYWORDS label (e.g. "Burgers").
     tier: "Value" | "Premium" | "Premium Edge".
@@ -346,10 +449,32 @@ def select_dish(category: str, tier: str, template_index: int,
     rather than something silently faked here.
     """
     templates = DISH_TEMPLATES.get(category, DISH_TEMPLATES[DEFAULT_CATEGORY])
+    used_concept_keys = used_concept_keys or set()
+
+    # UNIQUENESS VALIDATION happens at CANDIDATE-FILTERING time, before
+    # scoring/selection -- a template whose concept is already used this
+    # batch/session is removed from consideration entirely rather than
+    # picked and renamed. Only falls back to the full template list if
+    # every candidate in this category is exhausted (every real concept
+    # for this category has already been used) -- at that point the
+    # caller (run_menu_creation) should try a different category from the
+    # cuisine-affinity ranking rather than force a repeat here.
+    non_duplicate_templates = [
+        t for t in templates if not is_duplicate_concept(_derive_concept_key(t), used_concept_keys)
+    ]
+    duplicate_note = ""
+    if not non_duplicate_templates:
+        non_duplicate_templates = templates
+        duplicate_note = (
+            " Every distinct concept in this category has already been used this session -- "
+            "reusing the least-recently-used concept as a last resort; the caller should prefer "
+            "a different category from the cuisine-affinity ranking before this happens."
+        )
+    templates = non_duplicate_templates
 
     if len(templates) == 1:
         template = templates[0]
-        selection_note = "Only one template available for this category -- no selection to make."
+        selection_note = "Only one non-duplicate template available for this category." + duplicate_note
     else:
         scored = []
         for t in templates:
@@ -372,8 +497,8 @@ def select_dish(category: str, tier: str, template_index: int,
                 f"({'matched' if fscore > 0 else 'no flavor-keyword overlap'})"
             )
         selection_note = (
-            f"Selected by {' + '.join(note_parts)}." if note_parts
-            else "Selected by rotation (no occasion/comparable signal available for this item)."
+            f"Selected by {' + '.join(note_parts)}.{duplicate_note}" if note_parts
+            else f"Selected by rotation (no occasion/comparable signal available for this item).{duplicate_note}"
         )
 
     ingredients = list(template.base_ingredients)
@@ -404,6 +529,7 @@ def select_dish(category: str, tier: str, template_index: int,
         indulgent_lean=_indulgent_lean(ingredients_str + ' ' + description),
         portion_note=portion_note,
         template_selection_note=selection_note,
+        concept_key=_derive_concept_key(template),
     )
 
 

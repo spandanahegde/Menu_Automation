@@ -24,7 +24,6 @@ lets you edit any item's role/fit points before running the engine.
 
 from dataclasses import dataclass
 
-
 @dataclass
 class RoleAssignment:
     weekday_role: str
@@ -33,7 +32,6 @@ class RoleAssignment:
     weekend_role: str
     weekend_desc: str
     weekend_fit_points: float
-
 
 BREAKFAST_CATS = {'BREAKFAST', 'BREAKFAST SIDE'}
 

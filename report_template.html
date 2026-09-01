@@ -827,6 +827,18 @@
 </tbody>
 </table>
 </div>
+<h3 class="sub-head" style="margin-top:34px;">Lunch / Dinner &amp; Weekday / Weekend Pricing Snapshot</h3>
+<p class="intro-p" style="margin-top:6px;font-size:14px;">Only shown for items staying on the menu (Keep/Refresh) — a removed item has no forward price to optimize. Click any item's "Pricing Intelligence" chip in Sections 07–08 below for the full per-occasion calculation.</p>
+<div class="table-scroll">
+<table class="data-table">
+<thead><tr>
+<th>Menu Item</th><th>Current Price</th><th>Lunch / Dinner Recommendation</th><th>New Price</th><th>Weekday / Weekend Recommendation</th><th>New Price</th>
+</tr></thead>
+<tbody>
+{{PRICING_SNAPSHOT_ROWS}}
+</tbody>
+</table>
+</div>
 </section>
 
 <section class="sect" id="keep">
@@ -1043,6 +1055,9 @@ const definitions = {
     if (isNaN(n)) return '—';
     return n.toFixed(d===undefined?1:d) + '%';
   }
+  function eqLine(label, equation){
+    return label + ' = ' + equation;
+  }
   function statusLabel(s){ return s === 'keep' ? 'KEEP' : s === 'refresh' ? 'REFRESH' : 'REMOVE'; }
   function ordinal(n){
     const s = ["th","st","nd","rd"], v = n % 100;
@@ -1158,8 +1173,15 @@ const definitions = {
         const t = popTier(it.pr);
         return tbl(['Step','Value'], [
           ['Item', it.n],
+          ['Popularity Rank', eqLine('Popularity Rank', 'position of Total Qty Sold among 54 items = ' + it.pr + ' of 54')],
+          ['Popularity Percentile', eqLine('Popularity Percentile', '(54 - ' + it.pr + ') ÷ 53 × 100 = ' + pct(it.pp))],
+          ['Demand Tier', t.label],
+          ['Interpretation', it.n + ' is the ' + it.pr + ordinal(it.pr) + ' best-selling item of 54. ' + t.note]
+        ]);
+        return tbl(['Step','Value'], [
+          ['Item', it.n],
           ['Total Qty Sold — Rank', it.pr + ' of 54'],
-          ['Popularity Percentile', pct(it.pp)],
+          ['Popularity Percentile', eqLine('Popularity Percentile', '(54 âˆ’ Rank) Ã· 53 Ã— 100 = ' + pct(it.pp))],
           ['Demand Tier', t.label],
           ['Interpretation', it.n + ' is the ' + it.pr + ordinal(it.pr) + ' best-selling item of 54. ' + t.note]
         ]);
@@ -1247,6 +1269,12 @@ const definitions = {
       example(it, period){
         const chain = profitabilityChain(it);
         const trend = profitabilityTrend(it);
+        return tbl(['Step','Equation'], [
+          ['3-Mo', eqLine('Profitability Value', 'Future Margin × Demographic Multiplier × Category Modifier × Growth Multiplier = ' + pct(chain[0].futureMg) + ' × ' + it.dm.toFixed(4) + ' × ' + chain[0].catMod.toFixed(2) + ' × ' + chain[0].growth.toFixed(2) + ' = ' + chain[0].value.toFixed(2))],
+          ['6-Mo', eqLine('Profitability Value', 'Future Margin × Demographic Multiplier × Category Modifier × Growth Multiplier = ' + pct(chain[1].futureMg) + ' × ' + it.dm.toFixed(4) + ' × ' + chain[1].catMod.toFixed(2) + ' × ' + chain[1].growth.toFixed(2) + ' = ' + chain[1].value.toFixed(2))],
+          ['9-Mo', eqLine('Profitability Value', 'Future Margin × Demographic Multiplier × Category Modifier × Growth Multiplier = ' + pct(chain[2].futureMg) + ' × ' + it.dm.toFixed(4) + ' × ' + chain[2].catMod.toFixed(2) + ' × ' + chain[2].growth.toFixed(2) + ' = ' + chain[2].value.toFixed(2))],
+          ['Interpretation', 'Profitability Trend: ' + trend.label + ' — this item\'s category modifier (' + chain[0].catMod.toFixed(2) + 'x) and demographic fit (' + it.dm.toFixed(4) + 'x) ' + (trend.label === 'Improving' ? 'outweigh ingredient inflation.' : trend.label === 'Declining' ? 'do not fully offset ingredient inflation.' : 'roughly offset ingredient inflation.')]
+        ]);
         return tbl(['Period','Future Margin','× Demographic','× Category','× Growth','= Profitability Value'], [
           ['3-Mo', pct(chain[0].futureMg), it.dm.toFixed(4), chain[0].catMod.toFixed(2), chain[0].growth.toFixed(2), '<strong>'+chain[0].value.toFixed(2)+'</strong>'],
           ['6-Mo', pct(chain[1].futureMg), it.dm.toFixed(4), chain[1].catMod.toFixed(2), chain[1].growth.toFixed(2), '<strong>'+chain[1].value.toFixed(2)+'</strong>'],
@@ -1313,6 +1341,13 @@ const definitions = {
         ];
       },
       example(it){
+        return tbl(['Step','Value'], [
+          ['Commuter Score', eqLine('Commuter Score', '(Worker Inflow × 25%) + (Median Income × 20%) + (Population × 15%) + (Customer Segment × 15%) + (Cuisine Gap × 10%) + (Food Trend × 10%) + (Competition × 5%) = ' + num(it.cs).toFixed(1))],
+          ['Demographic Multiplier', eqLine('Demographic Multiplier', '0.90 + (' + num(it.cs).toFixed(1) + ' ÷ 100) × 0.20 = ' + it.dm.toFixed(4))],
+          ['Weekday Role', eqLine('Weekday Role', it.wdR + ' — ' + it.wdD)],
+          ['Weekend Role', eqLine('Weekend Role', it.weR + ' — ' + it.weD)],
+          ['Interpretation', it.n + '\'s blended Commuter Score of ' + pct(it.cs) + (num(it.cs) >= 60 ? ' fits the commuter/local profile and supports Keep or Refresh.' : ' falls below the 60 fit threshold.')]
+        ]);
         return tbl(['Step','Value'], [
           ['Commuter Score', pct(it.cs)],
           ['Demographic Multiplier', '0.90 + (' + pct(it.cs) + ' ÷ 100) × 0.20 = ' + it.dm.toFixed(4)],
@@ -1391,6 +1426,16 @@ const definitions = {
       },
       example(it){
         const tier = baselineGrowthTier(it.pp);
+        return tbl(['Step','Value'], [
+          ['Popularity Percentile', eqLine('Popularity Percentile', '(54 - ' + it.pr + ') ÷ 53 × 100 = ' + pct(it.pp))],
+          ['Baseline Growth Tier', eqLine('Baseline Growth Tier', 'tier lookup from Popularity Percentile = ' + tier.label + ' (' + (tier.rate>=0?'+':'') + tier.rate.toFixed(2) + '%/mo)')],
+          ['Current 6-Mo Units', eqLine('Current 6-Mo Units', 'Total Qty Sold (Annual) ÷ 2 = ' + it.uc + ' units')],
+          ['Current 6-Mo Sales', eqLine('Current 6-Mo Sales', 'Total Revenue (Annual) ÷ 2 = ' + money(it.sc))],
+          ['Forecast Units', eqLine('Next 6-Mo Units', 'Current 6-Mo Units × (1 + Adjusted Growth Rate)^6 = ' + it.uf + ' units')],
+          ['Forecast Sales', eqLine('Next 6-Mo Sales', 'Forecast Units × Selling Price = ' + money(it.sf))],
+          ['Signal', it.us],
+          ['Interpretation', it.n + ' sits in the ' + tier.label.toLowerCase() + ' baseline-growth tier. After market-factor adjustment, the 6-month bridge moves ' + it.uc + ' â†’ ' + it.uf + ' units â€” a ' + it.us + ' signal.']
+        ]);
         return tbl(['Step','Value'], [
           ['Popularity Percentile', pct(it.pp)],
           ['Baseline Growth Tier', tier.label + ' — ' + (tier.rate>=0?'+':'') + tier.rate.toFixed(2) + '%/mo'],
@@ -1473,31 +1518,58 @@ const definitions = {
     pricing: {
       title: 'Pricing Intelligence', eyebrow: 'Concept Dashboard · Meal Occasion Pricing', hasPeriods:true,
       periodList: [
-        {key:'lunch', label:'🥪 Lunch'}, {key:'dinner', label:'🌙 Dinner'},
+        {key:'lunch', label:'🥪 Lunch'}, {key:'dinner', label:'🍽️ Dinner'},
         {key:'weekday', label:'📅 Weekday'}, {key:'weekend', label:'🎉 Weekend'}
       ],
-      purpose: 'Instead of one fixed price all day, every day, this estimates occasion-specific prices and revenue using each item\'s real unit share across Lunch, Dinner, Weekday, and Weekend service — so pricing reflects when customers actually order this item, not an average across the whole week.',
-      terms: [
-        ['Total Quantity Sold', 'This item\'s current annual units sold — the base the occasion split is drawn from.'],
-        ['Lunch / Dinner Quantity Sold', 'Units sold during lunch vs. dinner hours, split by this item\'s category-typical daypart behavior (e.g. breakfast items skew overwhelmingly lunch/daytime; composed entrées skew dinner).'],
-        ['Weekday / Weekend Quantity Sold', 'Units sold Monday–Friday vs. Saturday–Sunday, split using this item\'s Weekend Role fit (see Market Opportunity concept) against a 5:2 fair-share baseline.'],
-        ['Unit Share', 'The percentage of total sales occurring during a specific occasion. Higher share = stronger customer preference for that occasion.'],
-        ['Demand Multiplier', 'A pricing adjustment factor derived from Unit Share — high demand supports a slight premium or holds price; low demand nudges price down to protect volume.'],
-        ['Base Recommended Price', 'The optimized selling price from the Menu Refresh Engine (the Suggested New Price for REFRESH items, or the current price for KEEP items), before occasion adjustment.'],
-        ['Occasion Price', 'The final recommended price for that specific occasion: Base Recommended Price × Demand Multiplier.'],
-        ['Estimated Occasion Units', 'Forecasted units expected to sell during that occasion: Estimated Total Units × Occasion Unit Share.'],
-        ['Estimated Occasion Revenue', 'Projected revenue for that occasion: Estimated Occasion Units × Occasion Price.']
-      ],
-      formulas: [
-        ['FORMULA', 'Unit Share (%) = Occasion Quantity Sold ÷ Total Quantity Sold × 100'],
-        ['FORMULA', 'Occasion Price = Base Recommended Price × Demand Multiplier'],
-        ['FORMULA', 'Estimated Occasion Units = Estimated Total Units × Occasion Unit Share'],
-        ['FORMULA', 'Estimated Occasion Revenue = Estimated Occasion Units × Occasion Price']
-      ],
-      whyNotes: [
-        'Why Lunch and Dinner get different multiplier directions: lunch traffic is volume-driven (speed, routine, office traffic), so very high lunch share (>70%) prices competitively (0.95×) to protect that volume. Dinner is experience-driven with higher willingness to pay, so very high dinner share (>70%) supports a premium (1.05×).',
-        'Why Weekday and Weekend also diverge: strong weekday share (>70%) reflects office-routine demand, which is price-sensitive, so it holds a slight discount (0.97×) to protect volume. Strong weekend share (>70%) reflects social, discretionary, less price-sensitive demand, so it supports a premium (1.05×).'
-      ],
+      dynamicTitle(occasion){
+        const names = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'};
+        return 'Pricing Intelligence — ' + (names[occasion] || 'Lunch');
+      },
+      purpose: 'Instead of one fixed price all day, every day, this estimates dimension-specific prices and revenue using each item\'s real unit share across Lunch, Dinner, Weekday, and Weekend service — so pricing reflects when customers actually order this item, not an average across the whole week.',
+      terms(occasion){
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
+        const pairName = (occasion==='lunch'||occasion==='dinner') ? 'Lunch / Dinner' : 'Weekday / Weekend';
+        return [
+          ['Total Quantity Sold', 'This item\'s current annual units sold — the base the ' + dim.toLowerCase() + ' split is drawn from.'],
+          [pairName + ' Quantity Sold', (occasion==='lunch'||occasion==='dinner')
+            ? 'Units sold during lunch vs. dinner hours, split by this item\'s category-typical daypart behavior (e.g. breakfast items skew overwhelmingly lunch/daytime; composed entrées skew dinner).'
+            : 'Units sold Monday–Friday vs. Saturday–Sunday, split using this item\'s Weekend Role fit (see Market Opportunity concept) against a 5:2 fair-share baseline.'],
+          [dim + ' Unit Share', 'The percentage of total sales occurring during ' + dim + ' — higher share means stronger customer preference for ' + dim.toLowerCase() + '.'],
+          [dim + ' Demand Multiplier', 'A pricing adjustment factor derived from ' + dim + ' Unit Share — high demand supports a slight premium or holds price; low demand nudges price down to protect volume.'],
+          ['Base Recommended Price', 'The optimized selling price from the Menu Refresh Engine (the Suggested New Price for REFRESH items, or the current price for KEEP items), before ' + dim.toLowerCase() + ' adjustment.'],
+          [dim + ' Price', 'The final recommended price for ' + dim + ': Base Recommended Price × ' + dim + ' Demand Multiplier.'],
+          ['Estimated Total Units', 'The item\'s forecasted total units across all service, from the validated Sales Forecast — the base the ' + dim + ' units estimate is drawn from.'],
+          ['Estimated ' + dim + ' Units', 'Forecasted units expected to sell during ' + dim + ': Estimated Total Units × ' + dim + ' Unit Share.'],
+          ['Estimated ' + dim + ' Revenue', 'Projected revenue for ' + dim + ': Estimated ' + dim + ' Units × ' + dim + ' Price.']
+        ];
+      },
+      formulas(occasion){
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
+        return [
+          ['FORMULA', dim + ' Unit Share (%) = ' + dim + ' Quantity Sold ÷ Total Quantity Sold × 100'],
+          ['FORMULA', dim + ' Price = Base Recommended Price × ' + dim + ' Demand Multiplier'],
+          ['FORMULA', 'Estimated ' + dim + ' Units = Estimated Total Units × ' + dim + ' Unit Share'],
+          ['FORMULA', 'Estimated ' + dim + ' Revenue = Estimated ' + dim + ' Units × ' + dim + ' Price']
+        ];
+      },
+      whyNotes(it, occasion){
+        const p = it.pricing;
+        if (!p) return ['This item is being removed from the menu — no forward pricing to optimize.'];
+        const occ = p[occasion] || p.lunch;
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
+        const byDim = {
+          lunch: 'Lunch traffic is volume-driven (speed, routine, office traffic), so higher Lunch share prices more competitively to protect that volume, while lower Lunch share allows a small premium.',
+          dinner: 'Dinner is experience-driven with higher willingness to pay, so higher Dinner share supports a premium, while lower Dinner share holds a small discount to protect volume.',
+          weekday: 'Strong Weekday share reflects price-sensitive office-routine demand, so it holds a slight discount to protect volume, while lower Weekday share allows a small premium.',
+          weekend: 'Strong Weekend share reflects social, discretionary, less price-sensitive demand, so it supports a premium, while lower Weekend share holds the base price.'
+        };
+        return [
+          'Why ' + dim + ' pricing moves the way it does: ' + byDim[occasion] +
+          ' This item\'s ' + dim + ' Unit Share is ' + pct(occ.share) + ', placing it in the ' +
+          occ.mult.toFixed(2) + '× ' + dim + ' Demand Multiplier bracket — ' +
+          (occ.mult > 1 ? 'a premium over the base price.' : occ.mult < 1 ? 'a discount off the base price.' : 'no change from the base price.')
+        ];
+      },
       multiplierTables(it){
         return [
           {title:'Lunch — Demand Multiplier', headers:['Lunch Unit Share','Multiplier','Interpretation'], rows:[
@@ -1526,56 +1598,104 @@ const definitions = {
       },
       kpis(it, occasion){
         const p = it.pricing;
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
         if (!p) return [{label:'Pricing Intelligence', val:'Not applicable', sub:'This item is being removed from the menu'}];
         const occ = p[occasion] || p.lunch;
-        const occLabel = occasion.charAt(0).toUpperCase() + occasion.slice(1);
         return [
-          {label:'Quantity Sold — ' + occLabel, val: occ.qty.toLocaleString('en-US'), sub: 'of ' + p.tq.toLocaleString('en-US') + ' total annual units'},
-          {label:'Unit Share', val: pct(occ.share), sub:'of total quantity sold'},
-          {label:'Demand Multiplier', val: occ.mult.toFixed(2) + '×', sub:'from Unit Share bracket'},
-          {label:'Occasion Price', val: moneyExact(occ.price), sub:'Base ' + moneyExact(p.bp), accent:true}
+          {label: dim + ' Quantity Sold', val: occ.qty.toLocaleString('en-US'), sub: 'of ' + p.tq.toLocaleString('en-US') + ' total annual units'},
+          {label: dim + ' Unit Share', val: pct(occ.share), sub:'of total quantity sold'},
+          {label: dim + ' Demand Multiplier', val: occ.mult.toFixed(2) + '×', sub:'from ' + dim + ' Unit Share bracket'},
+          {label: dim + ' Price', val: moneyExact(occ.price), sub:'Base ' + moneyExact(p.bp), accent:true}
         ];
       },
       solve(it, occasion){
         const p = it.pricing;
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
         if (!p) return [{formula:'This item is being removed from the menu — no forward pricing to optimize.', sub:'', result:'—'}];
         const occ = p[occasion] || p.lunch;
-        const occLabel = occasion.charAt(0).toUpperCase() + occasion.slice(1);
         return [
-          {formula:'Unit Share (%) = Occasion Quantity Sold ÷ Total Quantity Sold × 100', sub: occ.qty.toLocaleString('en-US') + ' ÷ ' + p.tq.toLocaleString('en-US') + ' × 100', result: pct(occ.share)},
-          {formula:'Demand Multiplier = lookup on ' + occLabel + ' Unit Share bracket', sub: pct(occ.share) + ' falls in the bracket for ' + occ.mult.toFixed(2) + '×', result: occ.mult.toFixed(2) + '×'},
-          {formula:'Occasion Price = Base Recommended Price × Demand Multiplier', sub: moneyExact(p.bp) + ' × ' + occ.mult.toFixed(2), result: moneyExact(occ.price)},
-          {formula:'Estimated Occasion Units = Estimated Total Units × Occasion Unit Share', sub: p.etu.toLocaleString('en-US') + ' × ' + pct(occ.share), result: occ.est_units.toLocaleString('en-US')},
-          {formula:'Estimated Occasion Revenue = Estimated Occasion Units × Occasion Price', sub: occ.est_units.toLocaleString('en-US') + ' × ' + moneyExact(occ.price), result: money(occ.est_rev)}
+          {formula: dim + ' Unit Share (%) = ' + dim + ' Quantity Sold ÷ Total Quantity Sold × 100', sub: occ.qty.toLocaleString('en-US') + ' ÷ ' + p.tq.toLocaleString('en-US') + ' × 100', result: pct(occ.share)},
+          {formula: dim + ' Demand Multiplier = multiplier selected from the ' + dim + ' demand bracket', sub: pct(occ.share) + ' falls in the bracket for ' + occ.mult.toFixed(2) + '×', result: occ.mult.toFixed(2) + '×'},
+          {formula: dim + ' Price = Base Recommended Price × ' + dim + ' Demand Multiplier', sub: moneyExact(p.bp) + ' × ' + occ.mult.toFixed(2), result: moneyExact(occ.price)},
+          {formula: 'Estimated ' + dim + ' Units = Estimated Total Units × ' + dim + ' Unit Share', sub: p.etu.toLocaleString('en-US') + ' × ' + pct(occ.share), result: occ.est_units.toLocaleString('en-US')},
+          {formula: 'Estimated ' + dim + ' Revenue = Estimated ' + dim + ' Units × ' + dim + ' Price', sub: occ.est_units.toLocaleString('en-US') + ' × ' + moneyExact(occ.price), result: money(occ.est_rev)}
         ];
       },
       example(it, occasion){
-        // Fixed reference case per the source spec — illustrates the
-        // method only, and deliberately does NOT change with item/tab.
+        // Fixed reference RESTAURANT case (Base $16.50, Total Qty 1,200,
+        // Estimated Total Units 1,320, Lunch Qty 780, Weekday Qty 857 —
+        // a 5:2 fair-share split) — illustrates the method only, never
+        // this item's real numbers. But per spec, WHICH dimension it
+        // shows must still track the selected tab: switching to Dinner
+        // shows the Dinner breakdown of this same reference case, etc.
+        const REF = {basePrice:16.50, totalQty:1200, estTotalUnits:1320, lunchQty:780, weekdayQty:857};
+        const dim = {lunch:'Lunch', dinner:'Dinner', weekday:'Weekday', weekend:'Weekend'}[occasion] || 'Lunch';
+        const qty = occasion==='lunch' ? REF.lunchQty
+                  : occasion==='dinner' ? REF.totalQty-REF.lunchQty
+                  : occasion==='weekday' ? REF.weekdayQty
+                  : REF.totalQty-REF.weekdayQty;
+        const share = qty / REF.totalQty * 100;
+        let mult, bracketLabel;
+        if (occasion==='lunch'){
+          mult = share>70?0.95:share>=50?0.98:share>=30?1.00:1.03;
+          bracketLabel = share>70?'>70%':share>=50?'50–70%':share>=30?'30–50%':'<30%';
+        } else if (occasion==='dinner'){
+          mult = share>70?1.05:share>=50?1.03:share>=30?1.00:0.98;
+          bracketLabel = share>70?'>70%':share>=50?'50–70%':share>=30?'30–50%':'<30%';
+        } else if (occasion==='weekday'){
+          mult = share>70?0.97:share>=50?1.00:1.03;
+          bracketLabel = share>70?'>70%':share>=50?'50–70%':'<50%';
+        } else {
+          mult = share>70?1.05:share>=50?1.03:1.00;
+          bracketLabel = share>70?'>70%':share>=50?'50–70%':'<50%';
+        }
+        const price = REF.basePrice * mult;
+        const estUnits = REF.estTotalUnits * share / 100;
+        const estRev = estUnits * price;
+        return tbl(['Step','Value'], [
+          ['Base Recommended Price', eqLine('Base Recommended Price', moneyExact(REF.basePrice))],
+          ['Total Quantity Sold', eqLine('Total Quantity Sold', REF.totalQty.toLocaleString('en-US'))],
+          [dim + ' Quantity Sold', eqLine(dim + ' Quantity Sold', qty.toLocaleString('en-US'))],
+          ['Estimated Total Units', eqLine('Estimated Total Units', REF.estTotalUnits.toLocaleString('en-US'))],
+          ['Unit Share', eqLine(dim + ' Unit Share (%)', dim + ' Quantity Sold ÷ Total Quantity Sold × 100 = ' + pct(share))],
+          ['Multiplier', eqLine(dim + ' Demand Multiplier', 'bracket lookup on ' + dim + ' Unit Share = ' + mult.toFixed(2))],
+          ['Price', eqLine(dim + ' Price', 'Base Recommended Price × ' + dim + ' Demand Multiplier = ' + moneyExact(REF.basePrice) + ' × ' + mult.toFixed(2) + ' = ' + moneyExact(price))],
+          ['Forecast Units', eqLine('Estimated ' + dim + ' Units', 'Estimated Total Units × ' + dim + ' Unit Share = ' + Math.round(estUnits).toLocaleString('en-US'))],
+          ['Forecast Revenue', eqLine('Estimated ' + dim + ' Revenue', 'Estimated ' + dim + ' Units × ' + dim + ' Price = ' + money(estRev))],
+          ['Interpretation','This worked example is a fixed reference case illustrating the method — the numbers update for the ' + dim + ' tab, but never reflect this item\'s real data.']
+        ]);
         return tbl(['Step','Calculation','Result'], [
-          ['Base Recommended Price','—','$16.50'],
-          ['Total Quantity Sold','—','1,200'],
-          ['Lunch Quantity Sold','—','780'],
-          ['Estimated Total Units','—','1,320'],
-          ['Step 1 — Lunch Unit Share','780 ÷ 1200 × 100','65%'],
-          ['Step 2 — Lunch Multiplier','65% falls in the 50–70% range','0.98'],
-          ['Step 3 — Lunch Price','16.50 × 0.98','$16.17'],
-          ['Step 4 — Estimated Lunch Units','1320 × 65%','858'],
-          ['Step 5 — Estimated Lunch Revenue','858 × 16.17','$13,876'],
-          ['Interpretation','This worked example is a fixed reference case illustrating the method — it does not change when you switch items or tabs.','']
+          ['Base Recommended Price','—', moneyExact(REF.basePrice)],
+          ['Total Quantity Sold','—', REF.totalQty.toLocaleString('en-US')],
+          [dim + ' Quantity Sold','—', qty.toLocaleString('en-US')],
+          ['Estimated Total Units','—', REF.estTotalUnits.toLocaleString('en-US')],
+          ['Step 1 — ' + dim + ' Unit Share', qty.toLocaleString('en-US') + ' ÷ ' + REF.totalQty.toLocaleString('en-US') + ' × 100', pct(share)],
+          ['Step 2 — ' + dim + ' Multiplier', pct(share) + ' falls in the ' + bracketLabel + ' range', mult.toFixed(2)],
+          ['Step 3 — ' + dim + ' Price', moneyExact(REF.basePrice) + ' × ' + mult.toFixed(2), moneyExact(price)],
+          ['Step 4 — Estimated ' + dim + ' Units', REF.estTotalUnits.toLocaleString('en-US') + ' × ' + pct(share), Math.round(estUnits).toLocaleString('en-US')],
+          ['Step 5 — Estimated ' + dim + ' Revenue', Math.round(estUnits).toLocaleString('en-US') + ' × ' + moneyExact(price), money(estRev)],
+          ['Interpretation','This worked example is a fixed reference case illustrating the method — the numbers update for the ' + dim + ' tab, but never reflect this item\'s real data.','']
         ]);
       }
     }
   };
 
   function tbl(headers, rows){
-    let h = '<table class="cm-table"><thead><tr>' + headers.map(x=>'<th>'+x+'</th>').join('') + '</tr></thead><tbody>';
+    const compactValueOnly = headers.length === 2 && String(headers[0]).toLowerCase() === 'step';
+    const displayHeaders = compactValueOnly ? [headers[1]] : headers;
+    let h = '<table class="cm-table"><thead><tr>' + displayHeaders.map(x=>'<th>'+x+'</th>').join('') + '</tr></thead><tbody>';
     rows.forEach(r => {
       const isInterp = String(r[0]).toLowerCase().indexOf('interpretation') === 0 || String(r[0]).toLowerCase().indexOf('rationale') === 0;
-      h += '<tr' + (isInterp ? ' class="tbl-hl"' : '') + '>' + r.map((c,i)=>{
-        const cls = (i>0 && !isInterp && /[\d$%]/.test(String(c)[0]||'')) ? ' class="tbl-num"' : '';
-        return '<td' + (isInterp && i===0 ? '' : cls) + (isInterp ? ' colspan="'+(i===0?1:headers.length-1)+'"' : '') + '>' + c + '</td>';
-      }).filter((_,i)=> !(isInterp && i>1)).join('') + '</tr>';
+      if (compactValueOnly){
+        const value = r[1];
+        const cls = (!isInterp && /[\d$%]/.test(String(value)[0]||'')) ? ' class="tbl-num"' : '';
+        h += '<tr' + (isInterp ? ' class="tbl-hl"' : '') + '><td' + cls + '>' + value + '</td></tr>';
+      } else {
+        h += '<tr' + (isInterp ? ' class="tbl-hl"' : '') + '>' + r.map((c,i)=>{
+          const cls = (i>0 && !isInterp && /[\d$%]/.test(String(c)[0]||'')) ? ' class="tbl-num"' : '';
+          return '<td' + (isInterp && i===0 ? '' : cls) + (isInterp ? ' colspan="'+(i===0?1:headers.length-1)+'"' : '') + '>' + c + '</td>';
+        }).filter((_,i)=> !(isInterp && i>1)).join('') + '</tr>';
+      }
     });
     return h + '</tbody></table>';
   }
@@ -1609,8 +1729,9 @@ const definitions = {
   function render(){
     const concept = CONCEPTS[state.key];
     const it = ITEM_DATA[state.itemId] || ITEM_DATA['item-1'];
+    const titleText = concept.dynamicTitle ? concept.dynamicTitle(state.period) : concept.title;
     modal.querySelector('.cm-eyebrow').textContent = concept.eyebrow;
-    modal.querySelector('.cm-head h3').textContent = concept.title;
+    modal.querySelector('.cm-head h3').textContent = titleText;
     modal.querySelector('.cm-item-name').textContent = it.n + (it.p ? ' · $' + it.p : '') + (it.pn ? ' → $' + it.pn : '');
 
     let html = '';
@@ -1633,15 +1754,18 @@ const definitions = {
       html += '<div class="cm-section"><div class="cm-section-title">The Short Version</div><div class="cm-why" style="font-size:13px;">' + concept.bigPicture + '</div></div>';
     }
 
+    const termsData = typeof concept.terms === 'function' ? concept.terms(state.period) : concept.terms;
     html += '<div class="cm-section"><div class="cm-section-title">Terminology — Every Term Used Below, Defined</div>' +
-      tbl(['Term','Definition'], concept.terms) + '</div>';
+      tbl(['Term','Definition'], termsData) + '</div>';
 
+    const formulasData = typeof concept.formulas === 'function' ? concept.formulas(state.period) : concept.formulas;
     html += '<div class="cm-section"><div class="cm-section-title">Formulas</div>' +
-      concept.formulas.map(f => `<div class="cm-formula-box"><span class="cm-f-tag">${f[0]}</span>${f[1]}</div>`).join('') + '</div>';
+      formulasData.map(f => `<div class="cm-formula-box"><span class="cm-f-tag">${f[0]}</span>${f[1]}</div>`).join('') + '</div>';
 
     if (concept.whyNotes){
+      const whyNotesData = typeof concept.whyNotes === 'function' ? concept.whyNotes(it, state.period) : concept.whyNotes;
       html += '<div class="cm-section"><div class="cm-section-title">Why These Numbers</div>' +
-        concept.whyNotes.map(n => '<div class="cm-why">' + n + '</div>').join('') + '</div>';
+        whyNotesData.map(n => '<div class="cm-why">' + n + '</div>').join('') + '</div>';
     }
 
     if (concept.multiplierTables){

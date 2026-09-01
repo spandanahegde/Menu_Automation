@@ -155,7 +155,9 @@ def build_output_row(ctx: ZctaContext, dish: GeneratedDish, tier: str, category_
                       comparables: list, comparable_details: list, comparable_total_found: int,
                       weekday_pct: float, weekend_pct: float, top_categories: list,
                       used_names: set, best_item_match: dict = None,
-                      income_by_ethnicity: dict = None) -> dict:
+                      income_by_ethnicity: dict = None, cuisine_score=None,
+                      primary_cuisine=None, secondary_cuisine=None,
+                      uniqueness_result: str = "") -> dict:
     ingredient_cost, prep_cost = estimate_cost_split(dish.price, dish.category)
     pb = profitability_block(ingredient_cost, prep_cost, dish.price)
 
@@ -182,15 +184,37 @@ def build_output_row(ctx: ZctaContext, dish: GeneratedDish, tier: str, category_
         if detail.get("name") and detail.get("name") != "None found"
     ]
 
-    cuisine_rationale = (
-        f"{display_name} is a {dish.category} item, category chosen because {dish.category} "
-        f"ranks #{category_rank} by count in this ZIP's local restaurant list. The {tier} price "
-        f"tier came from the real income-bracket analysis (Value {ctx.family_pct}% / "
-        f"Premium {ctx.premium_pct}% / Premium Edge {ctx.premium_edge_pct}% of ZIP households) -- "
-        f"not from local restaurant-count popularity. {dish.evidence_count} restaurant(s) already "
-        f"in this ZIP's own list carry {dish.category}, the local-market evidence for this category choice. "
-        f"{dish.template_selection_note}"
-    )
+    # Manager-readable cuisine rationale, built from the ZCTA-level cuisine
+    # affinity result (see cuisine_affinity.py) rather than restaurant-count
+    # popularity alone -- category/cuisine direction is decided BEFORE this
+    # dish exists; this paragraph explains that decision, it doesn't
+    # retroactively justify a pre-picked item.
+    if cuisine_score is not None:
+        why_category_fits = (
+            f"{cuisine_score.cuisine} is the calculated fit for the {dish.category} category in this ZCTA "
+            f"(affinity score {cuisine_score.final_score:.2f} of 1.00). {cuisine_score.reasoning}"
+        )
+        cuisine_rationale = (
+            f"{display_name} is a {dish.category} item under the {cuisine_score.cuisine} cuisine direction. "
+            f"{why_category_fits} The {tier} price tier came separately from this ZIP's real income-bracket "
+            f"analysis (Value {ctx.family_pct}% / Premium {ctx.premium_pct}% / Premium Edge "
+            f"{ctx.premium_edge_pct}% of households) -- income positions price, it did not select the cuisine. "
+            f"{dish.template_selection_note}"
+        )
+    else:
+        why_category_fits = (
+            f"{dish.category} ranks #{category_rank} by count in this ZIP's local restaurant list "
+            f"(cuisine-affinity scoring was unavailable for this run)."
+        )
+        cuisine_rationale = (
+            f"{display_name} is a {dish.category} item, category chosen because {dish.category} "
+            f"ranks #{category_rank} by count in this ZIP's local restaurant list. The {tier} price "
+            f"tier came from the real income-bracket analysis (Value {ctx.family_pct}% / "
+            f"Premium {ctx.premium_pct}% / Premium Edge {ctx.premium_edge_pct}% of ZIP households) -- "
+            f"not from local restaurant-count popularity. {dish.evidence_count} restaurant(s) already "
+            f"in this ZIP's own list carry {dish.category}, the local-market evidence for this category choice. "
+            f"{dish.template_selection_note}"
+        )
 
     confidence_score, confidence_explanation = confidence_score_and_explanation(
         dish, tier, pb.profit_pct, weekday_pct)
@@ -215,6 +239,13 @@ def build_output_row(ctx: ZctaContext, dish: GeneratedDish, tier: str, category_
         "Recommended Price Band": tier,
         "Recommended Menu Price ($)": dish.price,
         "Cuisine": cuisine_rationale,
+        "Primary Cuisine (ZCTA-wide)": primary_cuisine.cuisine if primary_cuisine else "Unavailable",
+        "Secondary Cuisine (ZCTA-wide)": secondary_cuisine.cuisine if secondary_cuisine else "Unavailable",
+        "Cuisine Affinity Score (this item's category)": (
+            round(cuisine_score.final_score, 2) if cuisine_score is not None else None
+        ),
+        "Why This Category Fits This ZCTA": why_category_fits,
+        "Uniqueness Validation Result": uniqueness_result or "Not evaluated",
         "Location": ctx.location_str(),
         "Restaurant Type / Service Model": f"Quick-Service / Fast-Casual ({', '.join(top_categories)} dominate this zip"
                                             f"{'; ' + ctx.anchor_note if ctx.has_anchor else '; no office/tourist anchor present'}).",

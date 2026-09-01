@@ -8,7 +8,7 @@ from creation_engine import build_zcta_context, category_landscape, select_compa
 from dish_library import select_dish, PRICE_BASELINE_BY_CATEGORY, TIER_PRICE_MULTIPLIER, DEFAULT_PRICE_BASELINE
 from output_row_builder import build_output_row
 import revenue_forecast as rf
-
+import cuisine_affinity as caff
 
 class MenuCreationError(Exception):
     pass
@@ -18,6 +18,25 @@ def _noop(message, fraction=None):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Cross-item / cross-ZCTA concept registry. Menu items must not repeat the
+# same underlying concept (protein+prep, see dish_library.is_duplicate_concept)
+# within a single ZCTA's batch, AND -- per the brief's requirement that the
+# "same menu concept is not repeatedly generated across ZCTAs" -- across
+# every ZCTA processed in the same app session. This is intentionally
+# process-local (not persisted to disk): a fresh app/process restart starts
+# a clean registry, matching how the rest of this pipeline treats session
+# state (comparable_usage, used_display_names) elsewhere in this file.
+# Call reset_concept_registry() to explicitly start a new session (e.g. a
+# "start over" action in the UI).
+# ---------------------------------------------------------------------------
+_SESSION_CONCEPT_KEYS = set()
+
+
+def reset_concept_registry():
+    _SESSION_CONCEPT_KEYS.clear()
+
+
 def _norm_text(value) -> str:
     return re.sub(r'[^a-z0-9]+', ' ', str(value).strip().lower()).strip()
 
@@ -25,7 +44,10 @@ def _norm_text(value) -> str:
 OUTPUT_COLUMNS = [
     "Recommended New Menu Item", "Recommended Category", "Recommended Ingredients",
     "Recommended Description", "Recommended Price Band", "Recommended Menu Price ($)",
-    "Cuisine", "Location", "Restaurant Type / Service Model", "ZIP Code",
+    "Cuisine", "Primary Cuisine (ZCTA-wide)", "Secondary Cuisine (ZCTA-wide)",
+    "Cuisine Affinity Score (this item's category)", "Why This Category Fits This ZCTA",
+    "Uniqueness Validation Result",
+    "Location", "Restaurant Type / Service Model", "ZIP Code",
     "Median Income ($)", "Median Age", "Household Size", "Resident Labor Force Note",
     "Unemployment Rate (%)", "Total Population", "Local Restaurant Density",
     "Zip-Wide Market Positioning", "Comparable Restaurant 1", "Comparable Restaurant 2",
@@ -53,14 +75,15 @@ OUTPUT_COLUMNS = [
     "Base Units (Monthly) -- category/market demand methodology, no multipliers applied",
     "Base Units Source",
     "Base Projected Units (Monthly) = Base Units x Demand Multiplier x Category Multiplier",
-    "Lunch Unit Share (%)", "Lunch Occasion Price ($)", "Lunch Estimated Units (Monthly)",
+    "Lunch Unit Share (%)", "Lunch Occasion Price ($)", "Lunch Price Multiplier", "Lunch Estimated Units (Monthly)",
     "Lunch Estimated Revenue (Monthly $)",
-    "Dinner Unit Share (%)", "Dinner Occasion Price ($)", "Dinner Estimated Units (Monthly)",
+    "Dinner Unit Share (%)", "Dinner Occasion Price ($)", "Dinner Price Multiplier", "Dinner Estimated Units (Monthly)",
     "Dinner Estimated Revenue (Monthly $)",
-    "Weekday Unit Share (%)", "Weekday Occasion Price ($)", "Weekday Estimated Units (Monthly)",
+    "Weekday Unit Share (%)", "Weekday Occasion Price ($)", "Weekday Price Multiplier", "Weekday Estimated Units (Monthly)",
     "Weekday Estimated Revenue (Monthly $)",
-    "Weekend Unit Share (%)", "Weekend Occasion Price ($)", "Weekend Estimated Units (Monthly)",
+    "Weekend Unit Share (%)", "Weekend Occasion Price ($)", "Weekend Price Multiplier", "Weekend Estimated Units (Monthly)",
     "Weekend Estimated Revenue (Monthly $)",
+    "Estimated Steady-State Monthly Revenue ($)",
     "6-Month Units (Months 1-6)", "Estimated 6-Month Revenue ($)",
     "Next 6-Month Units (Months 7-12)", "Estimated Next 6-Month Revenue ($)",
     "Next 9-Month Units (Months 13-21)", "Estimated Next 9-Month Revenue ($)",
@@ -216,10 +239,34 @@ def run(restaurant_df: pd.DataFrame, zcta: str, city: str, county: str,
         try:
             commuter_flow = md.fetch_commuter_flows(zcta, state_abbr, progress_callback=progress)
         except md.MarketDataError as e:
-            raise MenuCreationError(
-                f"Commuter flow fetch failed: {e} If this keeps happening for this ZCTA/state, use "
-                f"manual commuter-flow entry instead of waiting on the auto-fetch."
+            # NON-FATAL. Commuter flow only feeds the weekday/weekend
+            # lift factor, the Flow section, and the Market Demand
+            # Composite -- it is NOT needed for Customer Segmentation
+            # (built entirely from economic_profile's income brackets,
+            # already fetched successfully above) or for generating menu
+            # items themselves. Aborting the whole run over a slow/hung
+            # LODES connection was blocking segmentation and every other
+            # section that doesn't actually depend on commuter data --
+            # confirmed as a real, repeated failure mode (Tennessee's OD
+            # file in particular has been consistently too slow to
+            # finish within the timeout). Falls back to a neutral,
+            # clearly-labeled zero commuter profile instead: weekday/
+            # weekend lift becomes flat (no commuter-driven skew), Flow
+            # section shows honestly as unavailable, everything else
+            # proceeds on real data.
+            issues.append(
+                f"Commuter flow (LODES) data unavailable for ZCTA {zcta}: {e} Falling back to a neutral "
+                f"commuter profile -- weekday/weekend crowd-mix lift and the Flow section will not "
+                f"reflect real commuter patterns for this ZCTA, but Customer Segmentation, pricing, and "
+                f"menu-item generation are unaffected (they don't depend on commuter data). Use manual "
+                f"commuter-flow entry if you need real weekday/weekend lift for this ZCTA."
             )
+            commuter_flow = {
+                "daytime_workers": 0.0, "worker_inflow": 0.0, "resident_outflow": 0.0,
+                "stay_local": 0.0, "pct_income_high": 0.0, "pct_income_low": 0.0,
+                "pct_age_mid": 0.0, "pct_age_senior": 0.0, "pct_office_jobs": 0.0,
+                "source": "Unavailable (LODES fetch failed) -- neutral zero fallback",
+            }
 
     # Income-by-ethnicity (ACS S1903) and race/ethnicity population
     # composition (ACS B02001/B03003) -- market-context data only, never
@@ -255,10 +302,40 @@ def run(restaurant_df: pd.DataFrame, zcta: str, city: str, county: str,
         biz_residential_mix=biz_residential_mix, has_anchor=has_anchor, anchor_note=anchor_note,
         population_growth_rate=pop_growth["rate"],
     )
+    if not ctx.segmentation_available:
+        issues.append(
+            f"Customer segmentation (Value/Premium/Premium Edge) is unavailable for ZCTA {zcta}: Census "
+            f"published a real Total Households figure ({ctx.total_households:,}) but the detailed income-"
+            f"bracket breakdown (ACS Table B19001) came back empty for this geography -- a real suppression "
+            f"pattern, not missing code. A neutral even-ish split is used internally to still generate menu "
+            f"items and price tiers, but the report shows this section as unavailable rather than a "
+            f"fabricated percentage."
+        )
 
     progress("Analyzing local restaurant category landscape…", 0.60)
     landscape = category_landscape(zcta_restaurants)
-    top_categories = landscape[landscape["count"] > 0].head(3)["category"].tolist() or ["Fast Food"]
+
+    # CUISINE AFFINITY -- runs BEFORE any dish/category is picked. Answers
+    # "what food is most appropriate for THIS ZCTA based on its actual
+    # data?" first; category/dish selection below only operates inside
+    # this ranking. Replaces the old "top 3 categories by competitor
+    # count" selector, which is why every ZCTA used to converge on
+    # whichever category (usually Burgers) had the most local competitors
+    # regardless of who actually lives there.
+    progress(f"Calculating cuisine affinity for ZCTA {zcta} (demographics + income + competition + trend)…", 0.62)
+    cuisine_result = caff.compute_cuisine_affinity(
+        zcta=zcta, family_pct=ctx.family_pct, premium_pct=ctx.premium_pct,
+        premium_edge_pct=ctx.premium_edge_pct, median_age=ctx.median_age,
+        population_growth_rate=ctx.population_growth_rate,
+        landscape_df=landscape, total_restaurants=len(zcta_restaurants),
+        ethnicity_composition=ethnicity_composition,
+        income_by_ethnicity=income_by_ethnicity,
+    )
+    ctx.cuisine_affinity = cuisine_result  # attached for the report layer; doesn't change ctx's dataclass shape
+    top_categories = cuisine_result.category_priority_list()[:3] or ["Fast Food"]
+    avoided_categories = cuisine_result.avoided_categories()
+    category_to_cuisine = cuisine_result.category_to_cuisine()
+    category_priority_full = cuisine_result.category_priority_list() or ["Fast Food"]
 
     counts = tier_item_counts(n_items, ctx.family_pct, ctx.premium_pct, ctx.premium_edge_pct)
     tier_plan = []
@@ -275,8 +352,45 @@ def run(restaurant_df: pd.DataFrame, zcta: str, city: str, county: str,
 
     for i, tier in enumerate(tier_plan):
         progress(f"Building item {i+1} of {n_items} ({tier} tier)…", 0.65 + 0.3 * (i / max(n_items, 1)))
-        category = top_categories[i % len(top_categories)]
+
+        # Pick the next category from the cuisine-affinity ranking (not
+        # raw competitor-count rotation). Skips categories flagged "avoid"
+        # (weak evidence across every signal) and skips any category whose
+        # concepts are already exhausted this session, moving to the next
+        # affinity-ranked category instead of forcing a renamed repeat --
+        # this is the concept-level UNIQUENESS VALIDATION step from the
+        # brief, applied before generation rather than after.
+        from dish_library import has_available_concept
+        n_cats = len(category_priority_full)
+        category = None
+        avoided_but_used_note = ""
+        for k in range(n_cats):
+            candidate = category_priority_full[(i + k) % n_cats]
+            if candidate in avoided_categories:
+                continue
+            if has_available_concept(candidate, _SESSION_CONCEPT_KEYS):
+                category = candidate
+                break
+        if category is None:
+            # Every non-avoided category is concept-exhausted this session
+            # -- relax the avoid-list rather than the uniqueness rule
+            # (better to use a weak-evidence category once than repeat a
+            # concept that's already on the menu).
+            for k in range(n_cats):
+                candidate = category_priority_full[(i + k) % n_cats]
+                if has_available_concept(candidate, _SESSION_CONCEPT_KEYS):
+                    category = candidate
+                    avoided_but_used_note = (
+                        " Every stronger-evidence category was concept-exhausted this session, so a "
+                        "weaker-evidence category was used rather than repeat an existing concept."
+                    )
+                    break
+        if category is None:
+            category = category_priority_full[i % n_cats]  # fully exhausted; last resort
+
         category_rank = int(landscape[landscape["category"] == category].index[0]) + 1
+        item_cuisine = category_to_cuisine.get(category)
+        cuisine_score = next((s for s in cuisine_result.ranked if s.cuisine == item_cuisine), None)
 
         comparables, total_found = select_comparables(
             zcta_restaurants, category, already_used=comparable_usage, total_items_in_batch=n_items,
@@ -319,7 +433,16 @@ def run(restaurant_df: pd.DataFrame, zcta: str, city: str, county: str,
             evidence_count=total_found, household_size=ctx.household_size,
             lunch_share=rf.LUNCH_SHARE_BY_TIER.get(tier, 0.55),
             best_comparable_item=best_item_match,
+            used_concept_keys=_SESSION_CONCEPT_KEYS,
         )
+        was_duplicate_rejected = dish.concept_key in _SESSION_CONCEPT_KEYS
+        _SESSION_CONCEPT_KEYS.add(dish.concept_key)
+
+        uniqueness_result = (
+            "PASS -- new concept" if not was_duplicate_rejected else
+            "FLAGGED -- every distinct concept for this category was already used this session; "
+            "reused as a last resort (see item note)."
+        ) + avoided_but_used_note
 
         row = build_output_row(
             ctx=ctx, dish=dish, tier=tier, category_rank=category_rank,
@@ -328,6 +451,8 @@ def run(restaurant_df: pd.DataFrame, zcta: str, city: str, county: str,
             weekday_pct=mix["weekday_pct"], weekend_pct=mix["weekend_pct"],
             top_categories=top_categories, used_names=used_display_names,
             best_item_match=best_item_match, income_by_ethnicity=income_by_ethnicity,
+            cuisine_score=cuisine_score, primary_cuisine=cuisine_result.primary,
+            secondary_cuisine=cuisine_result.secondary, uniqueness_result=uniqueness_result,
         )
         used_display_names.add(row["Recommended New Menu Item"])
 

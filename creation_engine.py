@@ -17,8 +17,6 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from segment_calculator import calculate_customer_segments
-
 
 @dataclass
 class ZctaContext:
@@ -32,7 +30,6 @@ class ZctaContext:
     labor_force_participation_rate: float
     unemployment_rate: float
     total_population: int
-    total_households: int
     restaurant_count: int
     area_sq_mi: float
     family_pct: float
@@ -50,11 +47,8 @@ class ZctaContext:
     stay_local: float = 0.0
     population_growth_rate: Optional[float] = None
     indulgent_pct: Optional[float] = None
-    family_value_households: int = 0
-    premium_households: int = 0
-    premium_edge_households: int = 0
-    customer_segments_available: bool = True
-    segment_calculation_source: str = ""
+    segmentation_available: bool = True
+    total_households: int = 0
 
     def restaurant_density_per_sqmi(self) -> float:
         return round(self.restaurant_count / self.area_sq_mi, 2) if self.area_sq_mi else 0.0
@@ -113,10 +107,50 @@ def build_zcta_context(zcta: str, city: str, state: str, county: str,
                         population_growth_rate: Optional[float] = None,
                         indulgent_pct: Optional[float] = None) -> ZctaContext:
     ep = economic_profile
-    segments = calculate_customer_segments(ep)
-    family_pct = segments["family_value_pct"] or 0.0
-    premium_pct = segments["premium_pct"] or 0.0
-    premium_edge_pct = segments["premium_edge_pct"] or 0.0
+    family_pct_raw = ep["income_lt_25k_pct"] + ep["income_25k_49k_pct"]
+    premium_pct_raw = ep["income_50k_99k_pct"] + ep["income_100k_149k_pct"]
+    premium_edge_pct_raw = ep["income_150k_plus_pct"]
+
+    family_pct = round(family_pct_raw, 2)
+    premium_pct = round(premium_pct_raw, 2)
+    premium_edge_pct = round(premium_edge_pct_raw, 2)
+    raw_sum = family_pct + premium_pct + premium_edge_pct
+    residual = round(100.0 - raw_sum, 2)
+
+    # Two genuinely different situations, handled differently on purpose:
+    #  - SMALL residual (independent rounding of real ACS bracket data
+    #    landing a few hundredths off 100%): absorb it into the largest
+    #    segment (largest-remainder-style) so the three always sum to
+    #    exactly 100.00, per this report's own requirement.
+    #  - LARGE residual, specifically all three brackets computing to
+    #    (near) zero despite Total Households being real and nonzero:
+    #    this is NOT a rounding gap -- it means Census published the
+    #    household total (B19001_001E) but the detailed income-bracket
+    #    breakdown (B19001_002E-017E) came back empty for this geography,
+    #    a real, distinct suppression pattern. Silently forcing 100% into
+    #    one segment here would fabricate a specific, false claim ("this
+    #    ZCTA is 100% Value-tier") with zero real evidence behind it --
+    #    exactly the kind of invented-number problem this project has
+    #    consistently avoided elsewhere. Flagged as unavailable instead.
+    segmentation_available = True
+    total_households = int(ep.get("total_households") or 0)
+    if raw_sum < 1.0 and total_households > 0:
+        # Neutral, clearly-flagged default -- keeps every downstream
+        # consumer (tier assignment, crowd_mix_split, dish generation)
+        # working without needing null-checks everywhere. The REPORT
+        # layer is what actually decides what to show, gated on
+        # segmentation_available -- see creation_report_engine.build_segs.
+        segmentation_available = False
+        family_pct, premium_pct, premium_edge_pct = 34.0, 33.0, 33.0
+    elif residual != 0:
+        segments = {"family": family_pct, "premium": premium_pct, "premium_edge": premium_edge_pct}
+        largest_key = max(segments, key=segments.get)
+        if largest_key == "family":
+            family_pct = round(family_pct + residual, 2)
+        elif largest_key == "premium":
+            premium_pct = round(premium_pct + residual, 2)
+        else:
+            premium_edge_pct = round(premium_edge_pct + residual, 2)
 
     total_population = ep.get("total_population")
     if total_population is None:
@@ -137,7 +171,6 @@ def build_zcta_context(zcta: str, city: str, state: str, county: str,
         labor_force_participation_rate=ep["labor_force_participation_rate"],
         unemployment_rate=ep["unemployment_rate"],
         total_population=int(total_population),
-        total_households=segments["total_households"] or int(ep.get("total_households", 0) or 0),
         restaurant_count=restaurant_count, area_sq_mi=area_sq_mi,
         family_pct=family_pct, premium_pct=premium_pct, premium_edge_pct=premium_edge_pct,
         market_label=classify_market(family_pct, premium_edge_pct),
@@ -149,11 +182,7 @@ def build_zcta_context(zcta: str, city: str, state: str, county: str,
         daytime_workers=commuter_flow.get("daytime_workers", 0.0),
         stay_local=commuter_flow.get("stay_local", 0.0),
         population_growth_rate=population_growth_rate, indulgent_pct=indulgent_pct,
-        family_value_households=segments["family_value_raw"],
-        premium_households=segments["premium_raw"],
-        premium_edge_households=segments["premium_edge_raw"],
-        customer_segments_available=segments["available"],
-        segment_calculation_source=segments["source"],
+        segmentation_available=segmentation_available, total_households=total_households,
     )
 
 
@@ -236,9 +265,38 @@ def profitability_block(ingredient_cost: float, prep_cost: float, menu_price: fl
 def build_invention_prompt(ctx: ZctaContext, category: str, category_rank: int,
                             comparables: list, comparable_total_found: int,
                             price_tier: str, weekday_pct: float, weekend_pct: float,
-                            existing_item_names_in_batch: list) -> str:
+                            existing_item_names_in_batch: list,
+                            cuisine_score=None, existing_concept_keys: Optional[list] = None) -> str:
+    """
+    cuisine_score: a cuisine_affinity.CuisineScore -- the calculated
+    cuisine/category direction for THIS ZCTA (see cuisine_affinity.py).
+    This is a HARD INPUT, not a suggestion: the category/cuisine below was
+    already decided by the cuisine-affinity layer before this prompt is
+    built. The LLM's job is ONLY to generate a concept that satisfies
+    that already-calculated direction -- it must not independently pick
+    or override the cuisine.
+    existing_concept_keys: (protein/base, prep-method) pairs already used
+    this batch/session (see dish_library.is_duplicate_concept) -- the new
+    item's underlying concept must not match any of these, not just its
+    display name.
+    """
+    cuisine_block = ""
+    if cuisine_score is not None:
+        cuisine_block = f"""
+CALCULATED CUISINE DIRECTION FOR THIS ZCTA (hard constraint -- do not override):
+- Cuisine: {cuisine_score.cuisine} (affinity score {cuisine_score.final_score:.2f} of 1.00)
+- Why this cuisine fits this ZCTA: {cuisine_score.reasoning}
+- This category ("{category}") is one of this cuisine's approved categories. Generate strictly within
+  this cuisine's flavor/ingredient palette -- do not substitute a different cuisine's flavor profile.
+"""
     return f"""Generate ONE new menu item recommendation. Follow this exact pipeline, in order:
 
+ZCTA DATA -> CUSTOMER INTELLIGENCE -> CUISINE AFFINITY (already calculated below) -> MENU CATEGORY ->
+UNIQUE MENU CONCEPT -> VALIDATION -> FINAL MENU
+
+Do NOT start from a generic menu item (burger, wings, sandwich, etc.) and justify it afterward. The
+cuisine/category direction below was calculated FIRST from this ZCTA's real data; only generate within it.
+{cuisine_block}
 FIXED CONTEXT (already computed -- do not alter or re-derive any number below):
 - Location: {ctx.location_str()}
 - Category to use: "{category}" (rank #{category_rank} by count in the local restaurant list)
@@ -254,16 +312,30 @@ FIXED CONTEXT (already computed -- do not alter or re-derive any number below):
 - Anchor present: {ctx.anchor_note if ctx.has_anchor else "None"}
 - Indulgent-lean food profile: {f"{ctx.indulgent_pct}% (no formal review/rating data exists for this ZIP -- this is a judgment-call proxy)" if ctx.indulgent_pct is not None else "No data exists -- state this plainly"}
 - Item names already used in this batch (new item must not duplicate): {existing_item_names_in_batch}
+- CONCEPTS (protein/base + prep method) already used this batch/session -- your new item's underlying
+  concept must be DIFFERENT from every one of these, even if you'd give it a different adjective/name:
+  {existing_concept_keys or "None yet"}
 
 GENERATION STEPS (execute in order):
-1. Pick 4-6 named, real, kitchen-standard, costable ingredients consistent with "{category}" and the {price_tier} price tier. No vague terms.
-2. Derive the item name FROM those ingredients (format: [flavor/style descriptor present in your ingredient list] + [recognizable base item for the category]). Must not duplicate or closely mimic {comparables}.
+1. Pick 4-6 named, real, kitchen-standard, costable ingredients consistent with "{category}", the
+   calculated cuisine direction above, and the {price_tier} price tier. No vague terms.
+2. Derive the item name FROM those ingredients (format: [flavor/style descriptor present in your ingredient
+   list] + [recognizable base item for the category]). Must not duplicate or closely mimic {comparables},
+   and must not be a same-concept rename of anything in the existing-concepts list above (e.g. swapping
+   "Fire-Grilled" for "Signature" on the same protein+prep is NOT a new concept -- pick a different
+   protein, preparation method, or dish format instead).
 3. Write a one-sentence description: [cooking method] + [named ingredients] + [flavor finish]. No unearned adjectives.
-4. Write the Cuisine/rationale field: 2-3 sentences stating (a) what it is + category, (b) the category evidence path (rank #{category_rank} by count, OR explicit white-space justification if comparables list is empty), (c) that price tier came from the {price_tier} income-bracket %, not restaurant-count popularity.
+4. Write the Cuisine/rationale field, addressed to a restaurant manager: 2-3 sentences stating (a) which
+   calculated cuisine this item satisfies and why that cuisine fits this ZCTA's demographic/income/
+   competition/trend evidence, (b) the category evidence path (rank #{category_rank} by count, OR explicit
+   white-space justification if comparables list is empty), (c) that price tier came from the {price_tier}
+   income-bracket %, not restaurant-count popularity.
 
 Return ONLY this JSON object, no other text:
 {{
-  "item_name": "...", "category": "{category}", "ingredients": "comma-separated list",
+  "item_name": "...", "category": "{category}", "cuisine": "{cuisine_score.cuisine if cuisine_score else '...'}",
+  "concept_key": "protein/base + prep method, e.g. 'smoked pork shoulder, dry-rub'",
+  "ingredients": "comma-separated list",
   "description": "...", "price_band": "{price_tier}", "menu_price": 0.00,
   "cuisine_rationale": "...", "ingredient_cost_estimate": 0.00, "prep_cost_estimate": 0.00,
   "cost_basis_note": "one sentence on how the cost estimate was built",
@@ -273,7 +345,8 @@ Return ONLY this JSON object, no other text:
   "premium_adjacent_upgrade_path": "named ingredient swap + resulting tier",
   "portion_note": "...", "confidence_score": 1, "confidence_explanation": "...",
   "reason_for_recommendation": "Who it's for: ... What it does: ...",
-  "weekday_menu_role": "...", "weekend_menu_role": "..."
+  "weekday_menu_role": "...", "weekend_menu_role": "...",
+  "uniqueness_validation_result": "PASS or REJECTED-AND-REGENERATED, with a one-sentence reason"
 }}"""
 
 
@@ -295,4 +368,31 @@ def validate_batch(rows: list, comparable_usage: dict, total_items: int) -> list
         share = count / total_items if total_items else 0
         if share > 0.25:
             issues.append(f"Comparable restaurant '{name}' used in {share:.0%} of items -- exceeds 25% diversity cap.")
+
+    # CONCEPT-level uniqueness (not just name-level): flags items that
+    # share the same category + protein/base signal even under different
+    # display names -- e.g. "Fire-Grilled Chicken Burger" / "Charred
+    # Chicken Burger" / "Signature Chicken Burger" would all collide here.
+    # Reuses dish_library's own concept-key derivation so this check
+    # matches the deterministic-template path's definition of "duplicate."
+    from dish_library import _derive_concept_key, DishTemplate
+    seen_concepts = {}
+    for r in rows:
+        category = r.get("category", "")
+        ingredients_text = r.get("ingredients", "")
+        pseudo_template = DishTemplate(
+            base_ingredients=[i.strip() for i in ingredients_text.split(",") if i.strip()] or ["unknown"],
+            description=r.get("description", ""),
+        )
+        key = _derive_concept_key(pseudo_template)
+        base = key[0]
+        prior = seen_concepts.get((category, base))
+        if prior is not None:
+            issues.append(
+                f"Concept-level duplicate: '{r['item_name']}' ({category}) shares the same protein/base "
+                f"and category as '{prior}' -- likely a renamed version of the same concept, not a distinct item."
+            )
+        else:
+            seen_concepts[(category, base)] = r["item_name"]
+
     return issues

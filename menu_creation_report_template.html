@@ -1044,13 +1044,23 @@ function pct(v,d){ const n = num(v); if (isNaN(n)) return '—'; return n.toFixe
 function pct100(v,d){ return pct(num(v)*100, d); }
 
 function tbl(headers, rows){
-  let h = '<table class="cm-table"><thead><tr>' + headers.map(x=>'<th>'+x+'</th>').join('') + '</tr></thead><tbody>';
+  const compactValueOnly = headers.length === 2 && String(headers[0]).toLowerCase() === 'step';
+  const displayHeaders = compactValueOnly ? ['Calculation'] : headers;
+  let h = '<table class="cm-table"><thead><tr>' + displayHeaders.map(x=>'<th>'+x+'</th>').join('') + '</tr></thead><tbody>';
   rows.forEach(r => {
     const isHl = String(r[0]).toLowerCase().indexOf('interpretation')===0 || String(r[0]).toLowerCase().indexOf('rationale')===0;
-    h += '<tr' + (isHl?' class="tbl-hl"':'') + '>' + r.map((c,i)=>{
-      const cls = (i>0 && !isHl && /[\d$%]/.test(String(c)[0]||'')) ? ' class="tbl-num"' : '';
-      return '<td'+cls+(isHl && i===0?' colspan="1"':(isHl?' style="display:none"':''))+'>'+c+'</td>';
-    }).join('') + '</tr>';
+    if (compactValueOnly){
+      const step = String(r[0] || '');
+      const value = r[1] == null ? '' : String(r[1]);
+      const content = isHl ? value : (value ? step + ' = ' + value : step);
+      const cls = (!isHl && /[\d$%]/.test(String(content)[0]||'')) ? ' class="tbl-num"' : '';
+      h += '<tr' + (isHl ? ' class="tbl-hl"' : '') + '><td' + cls + '>' + content + '</td></tr>';
+    } else {
+      h += '<tr' + (isHl?' class="tbl-hl"':'') + '>' + r.map((c,i)=>{
+        const cls = (i>0 && !isHl && /[\d$%]/.test(String(c)[0]||'')) ? ' class="tbl-num"' : '';
+        return '<td'+cls+(isHl && i===0?' colspan="1"':(isHl?' style="display:none"':''))+'>'+c+'</td>';
+      }).join('') + '</tr>';
+    }
   });
   return h + '</tbody></table>';
 }
@@ -1128,7 +1138,7 @@ const CONCEPTS = {
   menuProfit: {
     title: 'Menu Profitability', eyebrow: 'Concept Dashboard · Total Menu', hasPeriods:true,
     periodList: [{key:'3',label:'3-Mo'},{key:'6',label:'6-Mo'},{key:'9',label:'9-Mo'}],
-    purpose: 'Profitability is the one place in this report driven by fixed formulas — every other judgment call (cuisine fit, segment fit, confidence score) is a qualitative business read, not a calculation. Each item\u2019s Gross Profit compounds forward by a consistent \u00d71.9 per quarter (a volume-growth assumption reverse-engineered from the source file, holding exactly for all 7 items). The totals below are the sum of that projection across all 7 recommended items.',
+    purpose: 'Profitability is the one place in this report driven by fixed formulas — every other judgment call (cuisine fit, segment fit, confidence score) is a qualitative business read, not a calculation. Each item\u2019s Gross Profit compounds forward by a consistent \u00d71.9 per quarter (a volume-growth assumption reverse-engineered from the source file). The totals below are the sum of that projection across all '+ITEMS.length+' recommended items.',
     terms: [
       ['Ingredient Cost','The raw cost of the food items that go into one serving.'],
       ['Prep Cost','The added cost of labor, cooking, and handling to turn raw ingredients into the finished dish.'],
@@ -1149,18 +1159,18 @@ const CONCEPTS = {
       ['FORMULA','9-Month Profit = 6-Month Profit \u00d7 1.9']
     ],
     whyNotes: [
-      'Why \u00d71.9 and not a different number: comparing all 7 recommended items shows the exact same ratio every time between one period\u2019s profit and the next. Rather than invent a new assumption, this report simply reports the ratio that is already, consistently, present in the source file.',
+      'Why \u00d71.9 and not a different number: comparing every recommended item shows the same ratio between one period\u2019s profit and the next. Rather than invent a new assumption, this report simply reports the ratio that is already, consistently, present in the source file.',
       'Why this differs from the Revenue Forecast (Section 07): this figure is a per-unit profit-dollar projection built purely from the formula above. The Revenue Forecast is a separate, unit-volume-based model driven by the real Category Volume Index and this ZIP\u2019s Market Demand Composite Index — the two are not meant to reconcile to the same number.'
     ],
     kpis(period){
       const t = menuProfitTotals();
       const byKey = {3:t.p3, 6:t.p6, 9:t.p9};
       return [
-        {label:'Total Menu Gross Profit', val: moneyExact(t.g), sub:'sum of 7 items, per unit sold'},
+        {label:'Total Menu Gross Profit', val: moneyExact(t.g), sub:'sum of '+ITEMS.length+' items, per unit sold'},
         {key:'3', label:'3-Month Total', val: moneyExact(t.p3), sub:'\u00d71.9 from Gross Profit'},
         {key:'6', label:'6-Month Total', val: moneyExact(t.p6), sub:'\u00d71.9 from 3-Month'},
         {key:'9', label:'9-Month Total', val: moneyExact(t.p9), sub:'\u00d71.9 from 6-Month', accent:true},
-        {label:'Avg. Profitability %', val: pct(t.avgProfitPct), sub:'across all 7 items'}
+        {label:'Avg. Profitability %', val: pct(t.avgProfitPct), sub:'across '+ITEMS.length+' items'}
       ];
     },
     solve(period){
@@ -1240,8 +1250,10 @@ const CONCEPTS = {
     ],
     kpis(period){
       const t = revenueTotals();
+      const n = ITEMS.length;
+      const itemsLabel = n + (n===1 ? ' item' : ' items');
       return [
-        {key:'first6', label:'Current 6-Mo Revenue', val: money(t.first6), sub:'Months 1\u20136, all 7 items'},
+        {key:'first6', label:'Current 6-Mo Revenue', val: money(t.first6), sub:'Months 1\u20136, all '+itemsLabel},
         {key:'next6', label:'Next 6-Mo Revenue', val: money(t.next6), sub:'Months 7\u201312'},
         {key:'next9', label:'Next 9-Mo Revenue', val: money(t.next9), sub:'Months 13\u201321', accent:true}
       ];
@@ -1283,18 +1295,16 @@ const CONCEPTS = {
     purpose: 'How this item\u2019s monthly unit volume and revenue were built, from the real Category Volume Index through to the 6- and 9-month totals \u2014 plus the documented Lunch/Dinner and Weekday/Weekend occasion split.',
     terms: [
       ['Category Demand Level', 'This item\u2019s Comparable Sales Category, bucketed from the real Category Volume Index into Very Low\u2013Very High.'],
-      ['Occasion Split','Lunch/Dinner and Weekday/Weekend shares are assigned from this item\u2019s established occasion role (see Section 09), not measured from POS data \u2014 no daypart field exists in the comparable-sales file.']
+      ['Occasion Split','Lunch/Dinner and Weekday/Weekend shares are assigned from this item\u2019s established occasion role (see Section 09), not measured from POS data \u2014 no daypart field exists in the comparable-sales file.'],
+      ['"Estimated" labeling','Every figure on this card is a projection for a menu item that does not exist yet \u2014 there is no sales history to measure. Base Units, the Demand/Category Multipliers, and every revenue figure below are labeled Estimated and each row shows the exact inputs used to derive it, not just the output.']
     ],
     formulas: [['FORMULA','Occasion Revenue = Estimated Units (that occasion) \u00d7 Occasion Price']],
     kpis(it){
       const r = REVMAP[it.name];
       return [
-        {label:'Base Units / Mo', val: r.baseUnitsM, sub:'from Category Volume Index'},
-        {label:'Category (Sales Model)', val: r.compSalesCategory+' ('+r.catLevel+')', sub:'\u00d7'+r.catMult.toFixed(2)+' multiplier'},
-        {label:'Base Projected Units / Mo', val: r.baseProjUnits.toFixed(1), sub:'steady-state'},
         {label:'Current 6-Mo Revenue', val: money(r.rev6m), sub: r.units6m.toFixed(0)+' units'},
         {label:'Next 6-Mo Revenue', val: money(r.revNext6m), sub: r.unitsNext6m.toFixed(0)+' units'},
-        {label:'Next 9-Mo Revenue', val: money(r.revNext9m), sub: r.unitsNext9m.toFixed(0)+' units', accent:true}
+        {label:'Next 9-Mo Revenue', val: money(r.revNext9m), sub: r.unitsNext9m.toFixed(0)+' units'}
       ];
     },
     multiplierTables(it){
@@ -1309,6 +1319,7 @@ const CONCEPTS = {
     solve(it){
       const r = REVMAP[it.name];
       return [
+        {formula:'Projected Monthly Revenue (Estimated) = Base Projected Units \u00d7 Price', sub: r.baseProjUnits.toFixed(2)+' \u00d7 '+moneyExact(it.price), result: money(r.steadyRev)},
         {formula:'Base Projected Units = Base Units \u00d7 Demand Multiplier \u00d7 Category Multiplier', sub: r.baseUnitsM+' \u00d7 '+r.demandMult.toFixed(2)+' \u00d7 '+r.catMult.toFixed(2), result: r.baseProjUnits.toFixed(2)+' units/mo'},
         {formula:'6M Units = Base Projected Units \u00d7 6M Factor (5.4)', sub: r.baseProjUnits.toFixed(2)+' \u00d7 5.4', result: r.units6m.toFixed(2)+' units', note:'The 5.4 factor already bakes in the Months 1\u20132 ramp-up (2 \u00d7 0.7) + 4 steady-state months.'},
         {formula:'6M Revenue = 6M Units \u00d7 Selling Price', sub: r.units6m.toFixed(2)+' \u00d7 '+moneyExact(it.price), result: money(r.rev6m)},
@@ -1441,9 +1452,10 @@ function openMenuItem(idx){
     ['Demographic Fit', it.demographicFit.split('.')[0]+'.', 'This ZIP\u2019s income profile supports this item\u2019s price tier.'],
     ['Segment Fit', it.priceBand+' \u2014 '+it.segWeekday+'% WD / '+it.segWeekend+'% WE', it.segmentFitNote],
     ['Cuisine / Comparable Match', (r.comp1||'')+' &amp; '+(r.comp2||''), 'Same ZIP, same category ('+(r.compSalesCategory||it.category)+') \u2014 validation only, not the basis for creating this item.'],
+    ['Cuisine Affinity', (it.primaryCuisine||'Unavailable')+(it.cuisineAffinityScore!=null?' (score '+it.cuisineAffinityScore+' of 1.00)':''), it.whyCategoryFits || 'Calculated from combined ZCTA demographic, income, competition, and trend signals before this item was generated \u2014 see Section 06.'],
     ['Market Opportunity', 'Below-average restaurant density', it.residentialNote.split(':').slice(1).join(':').split('.')[0]+'.'],
     ['Local Commuter Data', (r.baseUnitsM||'')+' base units/mo', 'Weekday volume blends this ZIP\u2019s resident population with the real commuter inflow/outflow analysis (16,170 estimated weekday daytime population, incl. in-commuting workers); weekend volume uses the full resident population (22,112). Feeds this item\u2019s Base Units and revenue forecast \u2014 not the ADD/REVISE call itself.'],
-    ['Ethnicity', 'Not used as a decision input', 'This ZIP is 89.74% Black/African American (see Section 06). Race/ethnicity plays no role in scoring or selecting this item \u2014 recommendations are driven by income-bracket and category-fit data only. Shown for market context, not as an input here.'],
+    ['Ethnicity', 'One input among several', 'Ethnicity is one of several ZCTA-level customer and market inputs \u2014 combined with median household income, median income by ethnicity, age/population characteristics, commuter/inflow data, local competition, and food-trend signals \u2014 that together produce this ZIP\u2019s calculated cuisine-affinity profile ('+(it.primaryCuisine||'see Section 06')+'). Ethnicity is never used alone to pick a cuisine or menu item.'],
     ['Confidence Score', it.confidence+' / 5', it.plainConfidence]
   ])+'</div>';
 
@@ -1608,11 +1620,13 @@ function renderOccasions(){
 function renderMenuProfitCards(){
   const t = menuProfitTotals();
   const grid = document.getElementById('menuProfitGrid');
+  const n = ITEMS.length;
+  const itemsLabel = n + (n===1 ? ' item' : ' items');
   const cards = [
-    {period:'3', label:'Total Menu Gross Profit', val: moneyExact(t.g), sub:'sum of 7 items, per unit sold today', badge:'Starting Point', cls:'neutral'},
-    {period:'3', label:'3-Month Profitability Value', val: moneyExact(t.p3), sub:'projected, all 7 items', badge:'\u00d71.9 from Gross Profit', cls:'neutral'},
-    {period:'6', label:'6-Month Profitability Value', val: moneyExact(t.p6), sub:'projected, all 7 items', badge:'\u00d71.9 from 3-Month', cls:'neutral'},
-    {period:'9', label:'9-Month Profitability Value', val: moneyExact(t.p9), sub:'projected, all 7 items', badge:'\u00d71.9 from 6-Month', cls:'pos'}
+    {period:'3', label:'Total Menu Gross Profit', val: moneyExact(t.g), sub:'sum of '+itemsLabel+', per unit sold today', badge:'Starting Point', cls:'neutral'},
+    {period:'3', label:'3-Month Profitability Value', val: moneyExact(t.p3), sub:'projected, all '+itemsLabel, badge:'\u00d71.9 from Gross Profit', cls:'neutral'},
+    {period:'6', label:'6-Month Profitability Value', val: moneyExact(t.p6), sub:'projected, all '+itemsLabel, badge:'\u00d71.9 from 3-Month', cls:'neutral'},
+    {period:'9', label:'9-Month Profitability Value', val: moneyExact(t.p9), sub:'projected, all '+itemsLabel, badge:'\u00d71.9 from 6-Month', cls:'pos'}
   ];
   grid.innerHTML = cards.map(c=>
     '<div class="msect-kpi-card" onclick="openMenuProfitConcept(\''+c.period+'\')">'
@@ -1650,11 +1664,13 @@ function renderEthnicBars(){
 function renderRevenueCards(){
   const t = revenueTotals();
   const grid = document.getElementById('revenueCardGrid');
+  const n = ITEMS.length;
+  const itemsLabel = n + (n===1 ? ' item' : ' items');
   grid.innerHTML = `
     <div class="rev-card cur6" onclick="openRevenueConcept('first6')">
       <div class="rc-period">Current 6-Month Revenue</div>
       <div class="rc-value">${money(t.first6)}</div>
-      <div class="rc-sub">Months 1&ndash;6 &middot; all 7 items, ramp-up included</div>
+      <div class="rc-sub">Months 1&ndash;6 &middot; all ${itemsLabel}, ramp-up included</div>
       <div class="rc-tap">Tap for full calculation &rarr;</div>
     </div>
     <div class="rev-card next6" onclick="openRevenueConcept('next6')">

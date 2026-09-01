@@ -18,6 +18,7 @@ ACS_YEAR = 2023  # most recent 5-year ACS release as of writing; bump as new rel
 LODES_VERSION = "LODES8"
 LODES_YEAR = 2021  # match whatever year your reference numbers came from
 LODES_STREAM_TIMEOUT_SECONDS = 180  # per OD file (main/aux) -- see fetch_commuter_flows
+ZCTA_BLOCKS_STREAM_TIMEOUT_SECONDS = 240  # national file, first time per ZCTA -- see _load_zcta_blocks
 LODES_JOB_TYPE = "JT00"  # all jobs
 LODES_BASE_URL = f"https://lehd.ces.census.gov/data/lodes/{LODES_VERSION}"
 
@@ -194,9 +195,6 @@ def fetch_economic_profile(zcta):
 
       median_household_income, median_age, avg_household_size,
       labor_force_participation_rate, unemployment_rate,
-      total_households,
-      income_lt_25k_count, income_25k_49k_count, income_50k_99k_count,
-      income_100k_149k_count, income_150k_plus_count,
       income_lt_25k_pct, income_25k_49k_pct, income_50k_99k_pct,
       income_100k_149k_pct, income_150k_plus_pct, source
 
@@ -224,15 +222,11 @@ def fetch_economic_profile(zcta):
                 except (TypeError, ValueError):
                     return 0.0
 
-            total_hh = f(INCOME_TOTAL_VAR)
-            raw_brackets = {
-                name.replace("_pct", "_count"): int(round(sum(f(v) for v in varlist)))
+            total_hh = f(INCOME_TOTAL_VAR) or 1.0
+            brackets = {
+                name: round(100.0 * sum(f(v) for v in varlist) / total_hh, 2)
                 for name, varlist in INCOME_BRACKET_VARS.items()
             }
-            pct_brackets = {
-                name: round(100.0 * raw_brackets[name.replace("_pct", "_count")] / total_hh, 2)
-                for name in INCOME_BRACKET_VARS
-            } if total_hh else {name: 0.0 for name in INCOME_BRACKET_VARS}
 
             labor_force_total = f(ACS_VARS_ADDITIONS['labor_force_total'])
             pop_16_plus = f(ACS_VARS_ADDITIONS['pop_16_plus']) or 1.0
@@ -246,9 +240,8 @@ def fetch_economic_profile(zcta):
                 'avg_household_size': f(ACS_VARS_ADDITIONS['avg_household_size']),
                 'labor_force_participation_rate': round(100.0 * labor_force_total / pop_16_plus, 1),
                 'unemployment_rate': round(100.0 * unemployed / labor_denom, 1) if labor_denom else 0.0,
-                'total_households': int(round(total_hh)) if total_hh else 0,
-                **raw_brackets,
-                **pct_brackets,
+                'total_households': int(total_hh) if total_hh else 0,
+                **brackets,
                 'source': f'ACS {year} B19013/B01002/B25010/B23025/B19001',
             }
         except MarketDataError as e:
@@ -664,9 +657,9 @@ def _infer_state_from_blocks(blocks):
     return counts.most_common(1)[0][0]
 
 
-@lru_cache(maxsize=256)
-def _load_zcta_blocks(zcta):
+def _load_zcta_blocks(zcta, progress_callback=None):
     zcta = _validate_zcta(zcta)
+    progress_callback = progress_callback or (lambda *a, **k: None)
     cache_path = _cache_dir() / f"zcta_blocks_rel2020_{zcta}.pkl"
     if cache_path.is_file():
         try:
@@ -678,6 +671,10 @@ def _load_zcta_blocks(zcta):
             pass
 
     request = _make_request(ZCTA_BLOCK_RELATIONSHIP_URL, accept="text/plain, */*;q=0.1")
+    progress_callback(f"Downloading national Census block-to-ZCTA relationship file "
+                       f"(first time for ZCTA {zcta} -- ~8M rows, cached afterward)...", None)
+    start_time = time.monotonic()
+    rows_seen = 0
     try:
         with urllib.request.urlopen(request, timeout=120) as resp:
             text_stream = io.TextIOWrapper(resp, encoding="utf-8-sig", newline="")
@@ -692,6 +689,27 @@ def _load_zcta_blocks(zcta):
 
             blocks = set()
             for row in reader:
+                rows_seen += 1
+                # Same wall-clock guard as fetch_commuter_flows' OD-file
+                # loop, and for the same reason: this streams a ~8M row
+                # NATIONAL file regardless of target ZCTA, with no timeout
+                # on the read loop itself (only the initial connection) --
+                # a stalled/slow-trickling connection here can otherwise
+                # hang indefinitely with no error ever raised.
+                if rows_seen % 500_000 == 0:
+                    elapsed = time.monotonic() - start_time
+                    progress_callback(
+                        f"Downloading Census block relationship file for ZCTA {zcta}... "
+                        f"({rows_seen:,} rows scanned, {elapsed:.0f}s elapsed)", None,
+                    )
+                    if elapsed > ZCTA_BLOCKS_STREAM_TIMEOUT_SECONDS:
+                        raise MarketDataError(
+                            f"National Census block-relationship file download for ZCTA {zcta} took "
+                            f"longer than {ZCTA_BLOCKS_STREAM_TIMEOUT_SECONDS}s ({rows_seen:,} rows "
+                            f"scanned before giving up) -- treating this as a hung/too-slow connection "
+                            f"rather than waiting indefinitely. Try again, or use manual commuter-flow "
+                            f"entry to skip this fetch."
+                        )
                 if str(row.get(zcta_field, "")).strip().zfill(5) != zcta:
                     continue
                 block = str(row.get(block_field, "")).strip()
@@ -801,7 +819,7 @@ def fetch_commuter_flows(zcta, state_abbr=None, progress_callback=None):
     zcta = _validate_zcta(zcta)
     progress_callback = progress_callback or (lambda *args, **kwargs: None)
 
-    blocks = _load_zcta_blocks(zcta)
+    blocks = _load_zcta_blocks(zcta, progress_callback=progress_callback)
     state_abbr = (state_abbr or zcta_to_state(zcta) or "").strip().lower()
     if not state_abbr:
         state_abbr = _infer_state_from_blocks(blocks) or ""

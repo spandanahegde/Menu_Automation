@@ -337,6 +337,22 @@ def compute_occasion_pricing(annual_qty, base_price, category_raw, weekend_role,
     }
 
 
+# ----------------------------------------------------------------------
+# Section 06 Sales Forecast — pricing-driven recommendation columns
+# (Lunch/Dinner, Weekday/Weekend, Adjusted Price (Final)). This is a
+# DIFFERENT, simpler rule set than Pricing Intelligence's exact
+# multipliers above — per spec, Section 06 uses ± percentage bands, not
+# fixed multipliers, and picks a single best-selling-period recommendation
+# per pair rather than showing all 4 occasions independently. Reuses the
+# same Lunch/Dinner/Weekday/Weekend shares already computed in `pricing`
+# (compute_occasion_pricing) so the two features never disagree on share.
+# ----------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# Section 06 Sales Forecast — Lunch/Dinner and Weekday/Weekend columns.
+# Reads directly from the SAME `pricing` dict Pricing Intelligence uses
+# (compute_occasion_pricing) — no separate rule set, so the two features
+# can never show conflicting numbers.
+# ----------------------------------------------------------------------
 def build_item(r):
     no = r['No.']
     name = r['Current Menu Item']
@@ -382,12 +398,13 @@ def build_item(r):
     # analysis_engine.py's compute_sales_forecast; est_total_units doubles
     # the item's own validated 6-mo forecast to approximate a forward
     # annual figure — no new upstream data required).
+    raw_price = float(price)
     pricing = None
     if s in ('keep', 'refresh'):
         annual_qty = float(r['Current Qty — Last 6 Mo']) * 2
         est_total_units = float(r['Total Forecast Qty — Next 6 Mo']) * 2
-        base_price = float(pn) if s == 'refresh' else float(price)
-        pricing = compute_occasion_pricing(annual_qty, base_price, cat_raw, weR, est_total_units)
+        base_price_for_fc = float(pn) if s == 'refresh' else raw_price
+        pricing = compute_occasion_pricing(annual_qty, base_price_for_fc, cat_raw, weR, est_total_units)
 
     return {
         'no': no, 'id': f'item-{no}', 'n': name, 'cat': cat,
@@ -396,6 +413,7 @@ def build_item(r):
         'mg': r['Current Margin %'], 'sp': money2(price), 'tc': money2(r['Theoretical Cost ($)']),
         'fr': r['Profitability Rank (1-5, relative)'], 'cs': r['Commuter Score (0-100)'],
         'dm': r['Demographic Multiplier'], 'mp': money2(r['Current Profit — 12 Mo ($)'] / 12),
+        'raw_price': raw_price,
         'pricing': pricing,
         'p3': money0(r['Current Profit — 3 Mo ($)']), 'p6': money0(r['Current Profit — 6 Mo ($)']),
         'p9': money0(r['Current Profit — 9 Mo ($)']), 'p12': money0(r['Current Profit — 12 Mo ($)']),
@@ -433,22 +451,32 @@ def trend_pill(signal):
 def acc_metrics_block(it):
     tp = trend_pill(it['us'])
     rec_pill = {'keep': 'trend-up', 'refresh': 'trend-flat', 'remove': 'trend-down'}[it['s']]
+    
     pricing_chip = ''
     if it.get('pricing'):
         base_p = it['pricing']['bp']
-        pricing_chip = (f'<div class="acc-metric concept-trigger" data-concept="pricing" '
-                         f'data-item="{it["id"]}" data-period="lunch"><span class="acc-metric-label">'
-                         f'Pricing Intelligence &#9432;</span><span class="acc-metric-val">'
-                         f'${base_p:.2f} base &middot; 4 occasions</span></div>')
+        pricing_chip = (
+            f'<div class="acc-metric concept-trigger" data-concept="pricing" '
+            f'data-item="{it["id"]}" data-period="lunch">'
+            f'<span class="acc-metric-label">Pricing Intelligence &#9432;</span>'
+            f'<span class="acc-metric-val">${base_p:.2f}</span>'
+            f'</div>'
+        )
+
     return f'''<div class="acc-metrics">
 <div class="acc-metric concept-trigger" data-concept="popularity" data-item="{it['id']}"><span class="acc-metric-label">Popularity &#9432;</span><span class="acc-metric-val">{it['pr']}/54</span></div>
-<div class="acc-metric concept-trigger" data-concept="profitability" data-item="{it['id']}"><span class="acc-metric-label">Profitability &#9432;</span><span class="acc-metric-val">{it['fr']}/5 &middot; {it['mg']:.2f}% margin</span></div>
-<div class="acc-metric concept-trigger" data-concept="commuter" data-item="{it['id']}"><span class="acc-metric-label">Commuter Fit &#9432;</span><span class="acc-metric-val">{it['cs']:.1f}/100</span></div>
-<div class="acc-metric concept-trigger" data-concept="salesforecast" data-item="{it['id']}"><span class="acc-metric-label">Sales Forecast &#9432;</span><span class="acc-metric-val">{it['uc']} &rarr; {it['uf']} <span class="trend-pill {tp}">{it['us']}</span></span></div>
-<div class="acc-metric concept-trigger" data-concept="recommendation" data-item="{it['id']}"><span class="acc-metric-label">Recommendation &#9432;</span><span class="acc-metric-val"><span class="trend-pill {rec_pill}">{it['s'].upper()}</span></span></div>
-{pricing_chip}
-</div>'''
 
+<div class="acc-metric concept-trigger" data-concept="profitability" data-item="{it['id']}"><span class="acc-metric-label">Profitability &#9432;</span><span class="acc-metric-val">{it['fr']}/5 &middot; {it['mg']:.2f}% margin</span></div>
+
+<div class="acc-metric concept-trigger" data-concept="commuter" data-item="{it['id']}"><span class="acc-metric-label">Commuter Fit &#9432;</span><span class="acc-metric-val">{it['cs']:.1f}/100</span></div>
+
+<div class="acc-metric concept-trigger" data-concept="salesforecast" data-item="{it['id']}"><span class="acc-metric-label">Sales Forecast &#9432;</span><span class="acc-metric-val">{it['uc']} &rarr; {it['uf']} <span class="trend-pill {tp}">{it['us']}</span></span></div>
+
+{pricing_chip}
+
+<div class="acc-metric concept-trigger" data-concept="recommendation" data-item="{it['id']}"><span class="acc-metric-label">Recommendation &#9432;</span><span class="acc-metric-val"><span class="trend-pill {rec_pill}">{it['s'].upper()}</span></span></div>
+
+</div>'''
 
 def cat_line(it):
     return (f'<p style="font-size:13px;color:var(--muted);margin:10px 0 6px;">'
@@ -504,6 +532,46 @@ def bridge_row(it):
 <td>${it['sf']}</td>
 <td>{it['uch']}</td>
 <td><span class="trend-pill {tp}">{it['us']}</span></td>
+</tr>'''
+
+
+def pricing_snapshot_row(it):
+    """Table row of Lunch/Dinner + Weekday/Weekend recommendations for one
+    item. Each recommendation cell and its matching New Price cell list
+    occasions in the SAME order, one per line — one line (Both) or two
+    lines (single winner) — so line N of the recommendation always lines
+    up with line N of the price next to it. No separate price-band/
+    engagement/adjustment columns; the calculation happens in
+    compute_occasion_pricing() and only the final result is shown here.
+    Returns '' for REMOVE items — no row rendered for them at all."""
+    if it['pricing'] is None:
+        return ''
+    p = it['pricing']
+    l, d, wd, we = p['lunch'], p['dinner'], p['weekday'], p['weekend']
+
+    def pair_cells(a, b, label_a, label_b):
+        # Near-balanced split (45-55%) — neither side meaningfully
+        # dominates, so both occasions are recommended, each with its
+        # own share and price, one below the other in matching order.
+        if 45 <= a['share'] <= 55:
+            rec = [f'{label_a} — {a["share"]:.0f}%', f'{label_b} — {b["share"]:.0f}%']
+            price = [f'${money2(a["price"])}', f'${money2(b["price"])}']
+        else:
+            winner, w_label = (a, label_a) if a['share'] > b['share'] else (b, label_b)
+            rec = [f'{w_label} — {winner["share"]:.0f}%']
+            price = [f'${money2(winner["price"])}']
+        return '<br/>'.join(rec), '<br/>'.join(price)
+
+    ld_rec, ld_price = pair_cells(l, d, 'Lunch', 'Dinner')
+    we_rec, we_price = pair_cells(wd, we, 'Weekday', 'Weekend')
+
+    return f'''<tr>
+<td><strong>{esc(it['n'])}</strong></td>
+<td>${money2(p['bp'])}</td>
+<td>{ld_rec}</td>
+<td>{ld_price}</td>
+<td>{we_rec}</td>
+<td>{we_price}</td>
 </tr>'''
 
 
@@ -661,6 +729,8 @@ def generate_report(workbook, template_path='report_template.html', market=None,
         '{{REFRESH_ACCORDION}}': '\n'.join(refresh_block(i) for i in refresh),
         '{{REMOVE_ACCORDION}}': '\n'.join(remove_block(i) for i in remove),
         '{{SALES_BRIDGE_ROWS}}': '\n'.join(bridge_row(i) for i in items),
+        '{{PRICING_SNAPSHOT_ROWS}}': '\n'.join(
+            row for row in (pricing_snapshot_row(i) for i in items) if row),
         '{{ITEM_DATA_JSON}}': json.dumps(item_data, ensure_ascii=False, separators=(',', ':')),
         '{{KEEP_COUNT}}': str(len(keep)),
         '{{REFRESH_COUNT}}': str(len(refresh)),

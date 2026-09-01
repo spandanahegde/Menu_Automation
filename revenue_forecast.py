@@ -360,9 +360,9 @@ def lunch_dinner_split(base_proj_units: float, price: float, tier: str,
 
     return {
         "lunch_share": lunch_share, "lunch_price": lunch_price, "lunch_units": lunch_units,
-        "lunch_revenue": round(lunch_units * lunch_price, 2),
+        "lunch_revenue": round(lunch_units * lunch_price, 2), "lunch_price_mult": lunch_price_mult,
         "dinner_share": dinner_share, "dinner_price": dinner_price, "dinner_units": dinner_units,
-        "dinner_revenue": round(dinner_units * dinner_price, 2),
+        "dinner_revenue": round(dinner_units * dinner_price, 2), "dinner_price_mult": dinner_price_mult,
     }
 
 
@@ -398,9 +398,9 @@ def weekday_weekend_split(base_proj_units: float, price: float, tier: str, ctx: 
 
     return {
         "weekday_share": weekday_share, "weekday_price": weekday_price, "weekday_units": weekday_units,
-        "weekday_revenue": round(weekday_units * weekday_price, 2),
+        "weekday_revenue": round(weekday_units * weekday_price, 2), "weekday_price_mult": weekday_price_mult,
         "weekend_share": weekend_share, "weekend_price": weekend_price, "weekend_units": weekend_units,
-        "weekend_revenue": round(weekend_units * weekend_price, 2),
+        "weekend_revenue": round(weekend_units * weekend_price, 2), "weekend_price_mult": weekend_price_mult,
     }
 
 
@@ -457,13 +457,24 @@ def build_revenue_forecast_row(category: str, tier: str, price: float, confidenc
         "Base Units Source": base_units_source,
         "Base Projected Units (Monthly) = Base Units x Demand Multiplier x Category Multiplier": proj_units,
         "Lunch Unit Share (%)": ld["lunch_share"], "Lunch Occasion Price ($)": ld["lunch_price"],
+        "Lunch Price Multiplier": ld["lunch_price_mult"],
         "Lunch Estimated Units (Monthly)": ld["lunch_units"], "Lunch Estimated Revenue (Monthly $)": ld["lunch_revenue"],
         "Dinner Unit Share (%)": ld["dinner_share"], "Dinner Occasion Price ($)": ld["dinner_price"],
+        "Dinner Price Multiplier": ld["dinner_price_mult"],
         "Dinner Estimated Units (Monthly)": ld["dinner_units"], "Dinner Estimated Revenue (Monthly $)": ld["dinner_revenue"],
         "Weekday Unit Share (%)": wdwe["weekday_share"], "Weekday Occasion Price ($)": wdwe["weekday_price"],
+        "Weekday Price Multiplier": wdwe["weekday_price_mult"],
         "Weekday Estimated Units (Monthly)": wdwe["weekday_units"], "Weekday Estimated Revenue (Monthly $)": wdwe["weekday_revenue"],
         "Weekend Unit Share (%)": wdwe["weekend_share"], "Weekend Occasion Price ($)": wdwe["weekend_price"],
+        "Weekend Price Multiplier": wdwe["weekend_price_mult"],
         "Weekend Estimated Units (Monthly)": wdwe["weekend_units"], "Weekend Estimated Revenue (Monthly $)": wdwe["weekend_revenue"],
+        # This item's own steady-state monthly revenue -- the "Projected
+        # Revenue" headline figure for the per-item pop-up. Always labeled
+        # Estimated (every input feeding it -- base units, demand
+        # multiplier, category multiplier -- is itself a computed/derived
+        # figure, never a directly-observed sale for a menu item that
+        # doesn't exist yet).
+        "Estimated Steady-State Monthly Revenue ($)": round(proj_units * price, 2),
         "6-Month Units (Months 1-6)": periods["6m_units"], "Estimated 6-Month Revenue ($)": periods["6m_revenue"],
         "Next 6-Month Units (Months 7-12)": periods["next6m_units"], "Estimated Next 6-Month Revenue ($)": periods["next6m_revenue"],
         "Next 9-Month Units (Months 13-21)": periods["next9m_units"], "Estimated Next 9-Month Revenue ($)": periods["next9m_revenue"],
